@@ -1,0 +1,123 @@
+---
+title: Credibility Analysis
+description: How TruthLens scores content across five credibility levels, what each level means, and how to read flags, claims, and next-step guidance in every result.
+---
+
+TruthLens evaluates submitted content against a structured five-level credibility scale. Every analysis returns a single score label backed by extracted claims, risk flags, sourcing notes, and actionable next steps — so you can understand not just *what* the verdict is, but *why*.
+
+## The Five Credibility Levels
+
+Each level maps to a numeric score and carries precise guidance text used throughout the UI.
+
+| Level | Score | Guidance |
+|---|---|---|
+| **Credible** | 88 | Evidence quality appears strong with consistent sourcing and limited manipulation signals. |
+| **Mostly credible** | 73 | Most signals look reliable, but a few details still deserve direct verification. |
+| **Mixed / use caution** | 55 | Some claims may be plausible, but sourcing and context are uneven. |
+| **Weakly supported** | 33 | Evidence appears thin or indirect. Treat this content as tentative. |
+| **High-risk / likely misleading** | 16 | Several risk signals suggest the claim may be manipulative or unreliable. |
+
+### What Each Level Means in Practice
+
+<CardGroup cols={1}>
+  <Card title="Credible (88)" icon="circle-check">
+    The model found consistent sourcing, low manipulation signals, and no significant evidence gaps. This does not mean the content is perfect — it means the observable signals align. You can proceed with standard verification habits.
+  </Card>
+
+  <Card title="Mostly credible (73)" icon="circle-check">
+    The majority of the content holds up, but at least one claim or framing choice warrants direct verification before citing or sharing. Treat this as a prompt to spot-check the weakest parts.
+  </Card>
+
+  <Card title="Mixed / use caution (55)" icon="triangle-exclamation">
+    Evidence quality is uneven across the content. Some parts may be well-sourced while others lack support, contain unclear framing, or make leaps not grounded in cited evidence. Read the flags section carefully.
+  </Card>
+
+  <Card title="Weakly supported (33)" icon="circle-exclamation">
+    The claims appear to be based on thin or indirect evidence. This may reflect an early, unverified report or a claim that significantly outpaces available sourcing. Do not share or cite without independent confirmation.
+  </Card>
+
+  <Card title="High-risk / likely misleading (16)" icon="circle-xmark">
+    Multiple risk signals were detected — emotional manipulation, weak or absent sourcing, overconfident framing, or missing context. This content should be treated as unreliable until independently verified against primary sources.
+  </Card>
+</CardGroup>
+
+<Note>
+  Scores are thresholds, not exact measurements. A result at 73 means signals are mostly clean — it does not guarantee every individual claim is verified. Always read the full flag list and source notes.
+</Note>
+
+## Flag Types
+
+Flags are the primary mechanism TruthLens uses to explain *why* a credibility score was assigned. Each flag contains a `type`, a direct `quote` from the submitted text, and an `explanation` of the risk signal.
+
+<AccordionGroup>
+  <Accordion title="Emotional Language">
+    Signals urgency, fear, or outrage to pressure readers into accepting claims before they can verify them. Common patterns include calls to share immediately, threats of deletion, and panic-inducing language.
+
+    **Example explanation from heuristic fallback:** "Urgency or fear framing can pressure readers into quick conclusions before verification."
+  </Accordion>
+
+  <Accordion title="Weak Sourcing">
+    The claim relies on vague, unnamed, or non-attributable sources. Phrases like "insiders say," "sources claim," "they don't want you to know," or "experts shocked" are common markers.
+
+    **Example explanation from heuristic fallback:** "The claim appears to rely on vague or unnamed sources, which lowers verifiability."
+  </Accordion>
+
+  <Accordion title="Overconfident Framing">
+    Language that overstates certainty relative to the evidence available. Words like "proves," "guaranteed," "always," "never," or "admitted" signal that the author is treating a contested or emerging claim as settled fact.
+
+    **Example explanation from heuristic fallback:** "Strong certainty language can overstate conclusions relative to available evidence."
+  </Accordion>
+
+  <Accordion title="Missing Context">
+    Critical supporting detail — timeline, primary source, institutional attribution, or counterevidence — is absent from the content. This flag is commonly added when verification cannot be completed without consulting external material.
+
+    **Example explanation from heuristic fallback:** "Independent context, timeline detail, and primary-source support are required before trusting this claim."
+  </Accordion>
+</AccordionGroup>
+
+## Understanding the Output Fields
+
+Every `AnalysisResult` object returned by the `/api/analyze` endpoint includes the following fields:
+
+### `credibilityScore`
+
+One of the five level strings: `"Credible"`, `"Mostly credible"`, `"Mixed / use caution"`, `"Weakly supported"`, or `"High-risk / likely misleading"`. This drives the score badge and numeric display in the UI.
+
+### `summary`
+
+A concise paragraph explaining the overall credibility assessment. Written by the model, it synthesizes the key signals into a human-readable verdict.
+
+### `mainClaims`
+
+An array of strings — the discrete factual assertions the model extracted from the submitted text. These are listed so you can evaluate each claim individually rather than treating the content as a monolith.
+
+### `flags`
+
+An array of flag objects, each with:
+- `type` — the signal category (see [Flag Types](#flag-types) above)
+- `quote` — the exact passage from the input that triggered the flag
+- `explanation` — why this passage is a risk signal
+
+### `sourceNotes`
+
+A prose assessment of the sourcing quality observed in the content. This field explicitly notes recency, source independence, official-source presence, and any verification gaps. When live grounding runs successfully, a Tavily citation summary is appended.
+
+### `contextNotes`
+
+Supplementary context that helps interpret the result — for example, noting that a claim is still developing, that the time-sensitivity classification affected how sources were retrieved, or that conflicting evidence was found.
+
+### `nextSteps`
+
+An ordered list of concrete verification actions the reader should take before citing, sharing, or acting on the content. Steps are calibrated to the specific claims and flags found in the analysis.
+
+### `citations`
+
+Structured source objects returned by Tavily live grounding (when available). Each citation includes `title`, `url`, `domain`, `publishedAt`, `snippet`, `sourceType`, and `recency`. See [Live Grounding](/features/live-grounding) for how citations are ranked.
+
+### `grounding`
+
+Metadata about the grounding process: whether it was attempted and succeeded, which search queries were used, whether the extract API was invoked, and whether the claim was classified as time-sensitive.
+
+### `warnings`
+
+An array of informational strings surfaced when grounding partially fails, evidence is stale, or a fallback path was used. Warnings are displayed in the UI and help readers understand confidence limitations.

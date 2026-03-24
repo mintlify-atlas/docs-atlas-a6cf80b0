@@ -1,0 +1,263 @@
+---
+title: POST /api/analyze
+description: Analyze a piece of text for credibility signals. Returns a structured AnalysisResult with a score, flags, citations, and grounding metadata.
+---
+
+## Endpoint
+
+```
+POST /api/analyze
+```
+
+Submits text content for credibility analysis. The handler builds a live Tavily web grounding pack, runs the grounded prompt through Gemini (with automatic model fallback), and falls back to Azure AI Foundry / Llama 3.1 8B if Gemini is unavailable. All paths normalize into the same `AnalysisResult` shape.
+
+## Request
+
+### Headers
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/json` |
+
+### Body
+
+<ParamField body="text" type="string" required>
+  The content to analyze. Accepts headlines, article excerpts, or social media posts. Must be a non-empty string — submitting an empty value or omitting this field returns a `400` error.
+</ParamField>
+
+### Example request body
+
+```json
+{
+  "text": "BREAKING: Dubai will go into a full citywide curfew tonight after secret emergency meetings..."
+}
+```
+
+### curl example
+
+```bash
+curl -X POST http://localhost:3000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text": "BREAKING: Dubai will go into a full citywide curfew tonight after secret emergency meetings..."}'
+```
+
+## Response
+
+### 200 Success
+
+Returns a full `AnalysisResult` object. All fields are always present — arrays may be empty and strings may be empty depending on the provider path used.
+
+```json
+{
+  "credibilityScore": "Mixed / use caution",
+  "summary": "A concise overall explanation of the credibility assessment.",
+  "mainClaims": ["Claim 1", "Claim 2"],
+  "flags": [
+    {
+      "type": "Emotional Language",
+      "quote": "BREAKING",
+      "explanation": "Uses urgency to provoke rapid sharing."
+    }
+  ],
+  "sourceNotes": "Summary of source quality and source reliability.",
+  "contextNotes": "Notes on missing context, uncertainty, or evolving details.",
+  "nextSteps": ["Check official statements", "Look for corroboration from major outlets"],
+  "citations": [],
+  "grounding": {
+    "attempted": true,
+    "succeeded": true,
+    "searchQueries": [],
+    "usedExtract": false,
+    "warning": null,
+    "retrievedAt": "",
+    "isTimeSensitive": true
+  },
+  "warnings": []
+}
+```
+
+### Response Fields
+
+<ResponseField name="credibilityScore" type="string">
+  The overall credibility rating for the submitted content. One of five fixed enum values:
+
+  | Value | Numeric Score | Meaning |
+  |-------|---------------|---------|
+  | `Credible` | 88 | Evidence quality appears strong with consistent sourcing and limited manipulation signals. |
+  | `Mostly credible` | 73 | Most signals look reliable, but a few details still deserve direct verification. |
+  | `Mixed / use caution` | 55 | Some claims may be plausible, but sourcing and context are uneven. |
+  | `Weakly supported` | 33 | Evidence appears thin or indirect. Treat this content as tentative. |
+  | `High-risk / likely misleading` | 16 | Several risk signals suggest the claim may be manipulative or unreliable. |
+</ResponseField>
+
+<ResponseField name="summary" type="string">
+  A concise natural-language explanation of the overall credibility assessment. Describes the primary reasoning behind the assigned score.
+</ResponseField>
+
+<ResponseField name="mainClaims" type="string[]">
+  An array of the distinct factual claims identified in the submitted text. Each item is a plain string.
+</ResponseField>
+
+<ResponseField name="flags" type="AnalysisFlag[]">
+  An array of credibility signal flags detected in the content. Each flag identifies a specific risk pattern with a direct quote and explanation.
+
+  <Expandable title="AnalysisFlag fields">
+    <ResponseField name="type" type="string">
+      Signal category label. Common values include `Emotional Language`, `Weak Sourcing`, `Missing Context`, `Overconfident Framing`, and `System`.
+    </ResponseField>
+
+    <ResponseField name="quote" type="string">
+      The specific excerpt from the submitted text that triggered this flag. May be an empty string if no direct quote is applicable (e.g. for `System` flags).
+    </ResponseField>
+
+    <ResponseField name="explanation" type="string">
+      A plain-language explanation of why this signal is a credibility concern and what it implies for verification.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="sourceNotes" type="string">
+  A narrative assessment of source quality, recency, official-source presence, and verification gaps observed in the submitted content and grounded evidence. Appended with a Tavily grounding summary when live web search succeeds.
+</ResponseField>
+
+<ResponseField name="contextNotes" type="string">
+  Notes on missing context, uncertainty, evolving details, or temporal sensitivity. Includes a note on whether the claim was classified as time-sensitive for grounding purposes.
+</ResponseField>
+
+<ResponseField name="nextSteps" type="string[]">
+  An ordered list of concrete verification actions the reader should take. Each item is a plain string recommendation.
+</ResponseField>
+
+<ResponseField name="citations" type="AnalysisCitation[]">
+  Sources retrieved by Tavily grounding and used as evidence during analysis. Empty when grounding did not run or returned no results.
+
+  <Expandable title="AnalysisCitation fields">
+    <ResponseField name="title" type="string">
+      The title of the source document. Defaults to `"Untitled source"` if not available.
+    </ResponseField>
+
+    <ResponseField name="url" type="string">
+      The full URL of the source. Citations with no URL are excluded from the array.
+    </ResponseField>
+
+    <ResponseField name="domain" type="string">
+      The lowercased domain name extracted from the source URL.
+    </ResponseField>
+
+    <ResponseField name="publishedAt" type="string | null">
+      ISO 8601 publication date of the source, or `null` if unavailable.
+    </ResponseField>
+
+    <ResponseField name="snippet" type="string">
+      A short excerpt from the source that was used as grounding evidence. Defaults to `"No source snippet available."` if empty.
+    </ResponseField>
+
+    <ResponseField name="sourceType" type="string">
+      Classification of the source. One of: `official`, `major-news`, `institutional`, `reference`, `other`.
+    </ResponseField>
+
+    <ResponseField name="recency" type="string">
+      Recency classification of the source. One of: `fresh`, `recent`, `aging`, `stale`, `unknown`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="grounding" type="AnalysisGrounding">
+  Metadata about the Tavily web grounding pass that ran before model analysis.
+
+  <Expandable title="AnalysisGrounding fields">
+    <ResponseField name="attempted" type="boolean">
+      Whether a Tavily grounding call was attempted for this request.
+    </ResponseField>
+
+    <ResponseField name="succeeded" type="boolean">
+      Whether the grounding call returned usable results.
+    </ResponseField>
+
+    <ResponseField name="searchQueries" type="string[]">
+      The search queries sent to Tavily during the grounding pass.
+    </ResponseField>
+
+    <ResponseField name="usedExtract" type="boolean">
+      Whether the Tavily extract feature was used to fetch full page content in addition to search snippets.
+    </ResponseField>
+
+    <ResponseField name="warning" type="string | null">
+      A human-readable warning if grounding was attempted but encountered an issue, otherwise `null`.
+    </ResponseField>
+
+    <ResponseField name="retrievedAt" type="string">
+      ISO 8601 timestamp of when the grounding data was retrieved.
+    </ResponseField>
+
+    <ResponseField name="isTimeSensitive" type="boolean">
+      Whether the submitted content was classified as time-sensitive, which causes Tavily to weight recent results more heavily.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="warnings" type="string[]">
+  An array of diagnostic or quality warning strings accumulated across the grounding and analysis pipeline. Empty in most successful runs.
+</ResponseField>
+
+## Error Responses
+
+### 400 — Invalid input
+
+Returned when `text` is missing, not a string, or is an empty/whitespace-only string.
+
+```json
+{
+  "error": "Request body must include a non-empty text string."
+}
+```
+
+### 500 — All providers failed
+
+Returned when both Gemini and Azure AI Foundry fail to produce a result. The response body is a valid `AnalysisResult` — not an error envelope — populated with `DEFAULT_ANALYSIS_RESULT` values. If Tavily grounding completed before the failure, its citations and grounding metadata are merged into this fallback result.
+
+<Warning>
+  A 500 response still returns an `AnalysisResult`-shaped JSON body. Always check the HTTP status code rather than inspecting the body to determine whether analysis succeeded.
+</Warning>
+
+```json
+{
+  "credibilityScore": "Mixed / use caution",
+  "summary": "Analysis is temporarily unavailable.",
+  "mainClaims": [],
+  "flags": [
+    {
+      "type": "System",
+      "quote": "",
+      "explanation": "The analysis service encountered an issue while processing this request."
+    }
+  ],
+  "sourceNotes": "No source verification could be completed.",
+  "contextNotes": "Try again shortly.",
+  "nextSteps": ["Retry this request in a few moments."],
+  "citations": [],
+  "grounding": {
+    "attempted": false,
+    "succeeded": false,
+    "searchQueries": [],
+    "usedExtract": false,
+    "warning": null,
+    "retrievedAt": "",
+    "isTimeSensitive": false
+  },
+  "warnings": []
+}
+```
+
+## Provider Fallback Order
+
+The handler runs providers in sequence, stopping at the first success:
+
+1. **Gemini** — primary path; tries configured model candidates in order (`GEMINI_MODEL` env var first, then `gemini-2.5-flash`, `gemini-2.0-flash`, `gemini-2.5-flash-lite`)
+2. **Azure AI Foundry / Llama 3.1 8B** — secondary fallback if Gemini fails
+3. **Heuristic policy fallback** — if Foundry is blocked by a content management policy, a rule-based analysis is produced from the input text directly
+4. **DEFAULT_ANALYSIS_RESULT** — returned with HTTP 500 if all above paths fail
+
+<Note>
+  For the full TypeScript type definitions of `AnalysisResult`, `AnalysisFlag`, `AnalysisCitation`, and `AnalysisGrounding`, see the [AnalysisResult type reference](/api/types/analysis-result).
+</Note>

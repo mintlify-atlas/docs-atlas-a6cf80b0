@@ -1,80 +1,190 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get TruthLens running locally — from clone to your first credibility analysis.
 ---
 
-## Get started in three steps
+This guide walks you through cloning the repository, configuring your API keys, and submitting your first analysis. The whole process takes about five minutes.
 
-Get your documentation site running locally and make your first customization.
+<Tip>
+  At minimum you need a **Gemini API key** to run TruthLens. Tavily and Azure AI Foundry are optional but strongly recommended — Tavily enables live web grounding, and Azure AI Foundry activates the Llama 3.1 fallback path.
+</Tip>
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- Node.js 18 or later
+- npm
+- A [Google AI Studio](https://aistudio.google.com) account (for Gemini)
+- Optionally: a [Tavily](https://app.tavily.com) account and an [Azure AI Foundry](https://ai.azure.com) deployment
 
-### Step 2: Deploy your changes
+---
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+## Setup
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+<Steps>
+  <Step title="Clone the repository">
+    Clone the TruthLens repository and move into the project directory.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    git clone https://github.com/manavcodaty/TruthLens.git
+    cd TruthLens
+    ```
+  </Step>
 
-### Step 3: Go live
+  <Step title="Install dependencies">
+    Install all Node.js dependencies with npm.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash
+    npm install
+    ```
+
+    This installs the core packages: `next`, `@google/generative-ai`, `@azure-rest/ai-inference`, `@tavily/core`, and the rest of the stack listed in `package.json`.
+  </Step>
+
+  <Step title="Create your environment file">
+    Create a `.env.local` file in the root of the project and add your API keys.
+
+    ```bash
+    touch .env.local
+    ```
+
+    Then open it in your editor and add the following — replacing each placeholder with a real value:
+
+    ```bash .env.local
+    # Required — Gemini (primary analysis model)
+    GEMINI_API_KEY=your_gemini_api_key_here
+    GEMINI_MODEL=gemini-2.5-flash
+
+    # Recommended — Tavily (live web grounding)
+    TAVILY_API_KEY=your_tavily_api_key_here
+
+    # Recommended — Azure AI Foundry (Llama 3.1 fallback)
+    AZURE_AI_FOUNDRY_ENDPOINT=https://your-foundry-endpoint.inference.ai.azure.com
+    AZURE_AI_FOUNDRY_API_KEY=your_foundry_api_key_here
+    ```
+
+    For a full explanation of every variable, including alternate names and which paths each key unlocks, see the [environment variables reference](/environment-setup).
+  </Step>
+
+  <Step title="Start the development server">
+    Run the Next.js development server.
+
+    ```bash
+    npm run dev
+    ```
+
+    The server starts at `http://localhost:3000`. Open that address in your browser.
+  </Step>
+
+  <Step title="Open the analysis workspace">
+    The TruthLens interface loads at `http://localhost:3000`. You will see an analysis workspace with a text input area.
+
+    Paste any headline, article excerpt, or social post into the workspace.
+  </Step>
+
+  <Step title="Submit your first analysis">
+    Submit the text and wait a few seconds while TruthLens:
+
+    1. Builds a live web grounding pack using Tavily
+    2. Runs credibility analysis with Gemini
+    3. Falls back to Azure AI Foundry / Llama 3.1 if needed
+    4. Returns a structured result
+
+    The result panel shows the credibility score, a summary, extracted claims, warning flags, source notes, context notes, next steps, and any live citations retrieved during grounding.
+  </Step>
+</Steps>
+
+---
+
+## Testing the API directly
+
+You can also submit text directly to the `POST /api/analyze` endpoint without using the UI.
+
+### Example request
+
+```bash
+curl -X POST http://localhost:3000/api/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text": "BREAKING: Dubai will go into a full citywide curfew tonight after secret emergency meetings."}'
+```
+
+### Example response shape
+
+```json
+{
+  "credibilityScore": "Mixed / use caution",
+  "summary": "A concise overall explanation of the credibility assessment.",
+  "mainClaims": [
+    "Dubai will implement a full citywide curfew tonight.",
+    "The decision followed secret emergency meetings."
+  ],
+  "flags": [
+    {
+      "type": "Emotional Language",
+      "quote": "BREAKING",
+      "explanation": "Uses urgency framing to pressure rapid sharing before verification."
+    },
+    {
+      "type": "Weak Sourcing",
+      "quote": "secret emergency meetings",
+      "explanation": "Refers to meetings with no named attendees, organizations, or documents."
+    }
+  ],
+  "sourceNotes": "No named officials or primary documents cited. Live grounding checked available sources.",
+  "contextNotes": "Claim classified as time-sensitive: recency weighting was applied during retrieval.",
+  "nextSteps": [
+    "Check Dubai Media Office or UAE government official channels.",
+    "Look for corroboration from established international outlets."
+  ],
+  "citations": [],
+  "grounding": {
+    "attempted": true,
+    "succeeded": true,
+    "searchQueries": [],
+    "usedExtract": false,
+    "warning": null,
+    "retrievedAt": "2026-03-24T00:00:00.000Z",
+    "isTimeSensitive": true
+  },
+  "warnings": []
+}
+```
+
+The five possible `credibilityScore` values are:
+
+| Score | Meaning |
+|---|---|
+| `Credible` | Well-supported by named sources and verifiable evidence |
+| `Mostly credible` | Generally sound with minor gaps or caveats |
+| `Mixed / use caution` | Contains a mix of supported and unsupported elements |
+| `Weakly supported` | Claims lack adequate sourcing or corroboration |
+| `High-risk / likely misleading` | Strong signals of manipulation, fabrication, or distortion |
+
+---
+
+## Available scripts
+
+```bash
+npm run dev      # Start the development server
+npm run build    # Build for production
+npm run start    # Start the production server
+npm run lint     # Run ESLint
+```
+
+---
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Environment variables" icon="key" href="/environment-setup">
+    Full reference for every API key, alias, and configuration option
+  </Card>
+  <Card title="Analysis pipeline" icon="diagram-project" href="/how-it-works/analysis-pipeline">
+    How grounding, model selection, and fallback logic work
+  </Card>
+  <Card title="Fallback logic" icon="layers" href="/how-it-works/fallback-logic">
+    Understand the Gemini → Foundry → heuristic fallback chain
+  </Card>
+  <Card title="API reference" icon="code" href="/api/analyze">
+    Full documentation for the POST /api/analyze endpoint
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

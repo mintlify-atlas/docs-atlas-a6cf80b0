@@ -1,0 +1,132 @@
+---
+title: Sample Analyses
+description: Four curated examples that demonstrate how TruthLens evaluates different content types — from viral rumors to structured press releases.
+---
+
+TruthLens ships with four built-in example analyses accessible from the main workspace at `/examples` and selectable from the "Quick sample inputs" panel on the analysis page. Each example is chosen to illustrate a distinct credibility pattern, flag type, or content format.
+
+You can also deep-link to any example by appending `?example=<id>` to the analysis URL, or load them into comparison mode with `?left=<id>&right=<id>`.
+
+## The Four Examples
+
+<AccordionGroup>
+  <Accordion title="Viral breakthrough claim — Social post" icon="triangle-exclamation">
+    **Example ID:** `viral-breakthrough`
+    **Category:** Social post
+
+    **Full text:**
+    > Dubai will go into a full citywide curfew tonight after secret emergency meetings. Residents are being told to stock up on food and fuel immediately before restrictions begin at midnight. Share this before they delete it.
+
+    **What this example demonstrates:**
+
+    This is a textbook high-risk social post. It combines multiple manipulation patterns in a single short message:
+
+    - **Urgency framing** — "tonight," "immediately," "before midnight" create artificial time pressure
+    - **Secrecy signaling** — "secret emergency meetings" implies hidden information without providing evidence
+    - **Virality bait** — "Share this before they delete it" is a classic suppression-fear tactic that bypasses the reader's verification instinct
+    - **No attribution** — no named official, agency, government body, or source URL is cited
+
+    TruthLens should classify this as `High-risk / likely misleading` and flag Emotional Language, Weak Sourcing, and Missing Context. If live grounding is active, Tavily will attempt to find official UAE government or major news coverage to corroborate or refute the curfew claim.
+
+    **What to verify:**
+    - Check UAE government official channels and major news outlets (Reuters, AP, BBC) for any actual curfew announcement
+    - Look for named officials or ministry statements
+    - Note that "secret meetings" cannot be verified by definition — this is a red flag
+  </Accordion>
+
+  <Accordion title="Loaded policy thread — Opinion thread" icon="comment">
+    **Example ID:** `loaded-policy-thread`
+    **Category:** Opinion thread
+
+    **Full text:**
+    > The new safety bill is proof that regulators are crushing open innovation on purpose. The biggest companies wrote the rules themselves, and independent researchers will be pushed out within months. This is the end of open knowledge unless people resist now.
+
+    **What this example demonstrates:**
+
+    This is an opinion-as-fact pattern — strong assertions framed as established conclusions without supporting evidence:
+
+    - **Overconfident framing** — "is proof that," "will be pushed out within months" present contested claims as certainties
+    - **Conspiratorial framing** — "on purpose" and "the biggest companies wrote the rules themselves" are serious claims that require sourcing
+    - **Urgency without evidence** — "unless people resist now" is a call to action built on unverified premises
+    - **No named sources or bills** — the "safety bill" is unnamed, making independent verification impossible
+
+    TruthLens should classify this as `Weakly supported` or `Mixed / use caution`, flagging Overconfident Framing and Missing Context. The analysis will note that the tone is assertive but the evidence backing is absent.
+
+    **What to verify:**
+    - Identify the specific bill being referenced
+    - Check the public comment record and legislative text for evidence of industry capture
+    - Look for independent researcher commentary from academic sources
+  </Accordion>
+
+  <Accordion title="Structured announcement — News excerpt" icon="building-columns">
+    **Example ID:** `balanced-press-release`
+    **Category:** News excerpt
+
+    **Full text:**
+    > Saab and the Kyiv School of Economics announced a collaboration framework for research in unmanned aerial systems and microelectronics. According to their joint statement, the partnership will focus on technical R&D programs, educational initiatives, and long-term innovation capacity for defense technology.
+
+    **What this example demonstrates:**
+
+    This is a structured, institutional announcement that represents the higher end of credibility for the format:
+
+    - **Named institutions** — Saab and the Kyiv School of Economics are both identifiable and verifiable organizations
+    - **Attributed sourcing** — "according to their joint statement" is a traceable source
+    - **Neutral tone** — no urgency, fear, or certainty language
+    - **Specific topic scope** — UAVs and microelectronics R&D is a verifiable subject area
+
+    However, this is still a press release format — the source of information is the announcing parties themselves, which means independent verification of the claims (existence of the framework, actual scope, timeline) still matters.
+
+    TruthLens should classify this as `Mostly credible` or `Credible` while noting in source notes that the primary source is the organizations' own statement. Flags, if any, will relate to the self-reported nature of the announcement rather than manipulation signals.
+
+    **What to verify:**
+    - Confirm the joint statement is publicly available from both institutions
+    - Check for independent news coverage of the partnership
+    - Assess whether claimed R&D scope matches either organization's publicly known capabilities
+  </Accordion>
+
+  <Accordion title="Sensational headline — Headline" icon="newspaper">
+    **Example ID:** `sensational-headline`
+    **Category:** Headline
+
+    **Full text:**
+    > Scientists admit popular wellness supplement may reverse memory loss in two weeks, experts shocked by hidden data.
+
+    **What this example demonstrates:**
+
+    This is a classic sensational health headline that uses several high-risk patterns in a single sentence:
+
+    - **"Scientists admit"** — "admit" implies reluctant disclosure of suppressed information, which is a manipulation frame
+    - **"may reverse memory loss in two weeks"** — a very strong medical claim with extreme specificity (two weeks) and no citation
+    - **"experts shocked"** — emotional reaction language designed to signal magnitude without providing evidence
+    - **"hidden data"** — implies suppression of information, a standard credibility-attack framing
+    - **No named supplement, no study, no journal** — the claim cannot be verified from the headline alone
+
+    TruthLens should classify this as `Weakly supported` or `High-risk / likely misleading` and flag Emotional Language, Overconfident Framing, Weak Sourcing, and Missing Context. The analysis will note that the claim requires a peer-reviewed study with a named compound and published methodology before it can be taken seriously.
+
+    **What to verify:**
+    - Identify the specific supplement and the study being referenced
+    - Check PubMed or a similar database for peer-reviewed studies on the compound
+    - Verify whether "experts shocked" refers to any named, credentialed individuals
+    - Note that two-week reversal of memory loss is an extraordinary claim requiring extraordinary evidence
+  </Accordion>
+</AccordionGroup>
+
+## Using Examples in Comparison Mode
+
+Any two examples can be loaded directly into comparison mode to run a side-by-side credibility contrast:
+
+```
+/compare?left=viral-breakthrough&right=balanced-press-release
+/compare?left=sensational-headline&right=loaded-policy-thread
+```
+
+The default contrast pre-loaded in comparison mode (a rumor vs. an official announcement) illustrates the same principle as placing `viral-breakthrough` against `balanced-press-release`: the same rubric applied to both surfaces exactly where the differences in credibility originate.
+
+## Example IDs Reference
+
+| ID | Title | Category |
+|---|---|---|
+| `viral-breakthrough` | Viral breakthrough claim | Social post |
+| `loaded-policy-thread` | Loaded policy thread | Opinion thread |
+| `balanced-press-release` | Structured announcement | News excerpt |
+| `sensational-headline` | Sensational headline | Headline |

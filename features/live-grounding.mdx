@@ -1,0 +1,193 @@
+---
+title: Live Grounding
+description: How TruthLens uses Tavily to retrieve, rank, and inject real-time web evidence into every credibility analysis.
+---
+
+TruthLens uses [Tavily](https://tavily.com) to ground analysis in live web evidence before the language model produces a verdict. Rather than relying solely on model training data, the grounding pipeline retrieves current sources, ranks them by authority and recency, and injects a structured evidence pack directly into the model prompt.
+
+<Note>
+  The Tavily API key (`TAVILY_API_KEY`) is optional. Without it, TruthLens still runs a full analysis using model knowledge — but grounding metadata will show `succeeded: false` and citations will be empty. Time-sensitive claims in particular benefit significantly from live grounding.
+</Note>
+
+## Pipeline Overview
+
+The grounding pipeline runs in six steps before the language model is called:
+
+```
+1. Classify claim        → is it time-sensitive? breaking? high-stake?
+2. Build search queries  → up to 3 targeted queries from the input text
+3. Run Tavily searches   → parallel searches with depth/topic tuned to claim type
+4. Rank all results      → score by source authority + recency + Tavily relevance
+5. Decide on extract     → fetch full content for top URLs if evidence is sparse
+6. Format context pack   → structured LIVE_WEB_GROUNDING_PACK injected into prompt
+```
+
+## Step 1 — Claim Classification
+
+Before any search runs, TruthLens scans the submitted text for signal terms that determine how aggressively to retrieve evidence.
+
+### Time-sensitive terms
+
+The presence of any of these terms sets `isTimeSensitive: true`, which increases search depth, switches the Tavily topic to `news`, raises the result count to 8, and tightens recency scoring:
+
+```
+today, tonight, right now, breaking, just announced, live, latest,
+currently, this morning, this evening, urgent, now, within hours, immediately
+```
+
+ISO-format dates (`2025-03-24`) and short date references (`Mar 24`, `3/24`) also trigger time-sensitivity.
+
+### Breaking news terms
+
+A subset that additionally constrains Tavily search to the past 2 days (`timeRange: "day"`):
+
+```
+breaking, developing, just in, emergency, confirmed now, alert,
+evacuation, shutdown, lockdown, curfew
+```
+
+### High-stake terms
+
+Terms that indicate consequential claims warranting a rumor-verification query and official-source prioritization:
+
+```
+war, missile, strike, attack, election, resigned, resignation, appointed,
+killed, died, earthquake, flood, wildfire, outbreak, health advisory,
+sanction, ruling, supreme court, market crash, bank run, flight cancelled,
+airline disruption, product recall, service outage
+```
+
+## Step 2 — Query Construction
+
+Up to three search queries are generated from the input:
+
+1. **Base claim query** — the first two sentences of the sanitized input, truncated to 180 characters
+2. **Entity + authority query** — named entities extracted from the text joined with `"official statement"` or `"verified report"` depending on whether official sources are prioritized
+3. **Recency query** — only for time-sensitive claims; appends `"latest updates"` and the current date
+4. **Rumor-verification query** — only for breaking or high-stake claims; anchors on key entities and appends `"rumor verification official sources"`
+
+Sensational terms are stripped from queries before submission to avoid biasing search results:
+
+```
+breaking, shocking, secret, they don't want you to know, must watch,
+urgent, panic, exposed, 100%, guaranteed, everyone must, share now,
+immediately, before it's deleted
+```
+
+## Step 3 — Tavily Search
+
+All queries run in parallel. Search configuration is tuned per claim type:
+
+| Setting | Time-sensitive | Standard |
+|---|---|---|
+| `searchDepth` | `advanced` | `basic` |
+| `topic` | `news` | `general` |
+| `maxResults` | 8 | 6 |
+| `chunksPerSource` | 3 | 2 |
+| `timeRange` | `day` (breaking) / `week` | — |
+| `days` | 2 (breaking) / 14 | — |
+
+## Step 4 — Source Ranking
+
+Every result from every query is scored using a composite ranking formula:
+
+```
+rankingScore = (tavilyScore × 100) + sourceTypeScore + recencyScore
+```
+
+### Source type scores
+
+Sources are classified by domain pattern and awarded a fixed bonus:
+
+| Source type | Score bonus | Domains / patterns |
+|---|---|---|
+| `official` | +24 | `.gov`, `.mil`, `.int`, `who.int`, `un.org`, `europa.eu` |
+| `major-news` | +18 | Reuters, AP, BBC, NYT, WaPo, WSJ, Bloomberg, FT, Guardian, NPR, Al Jazeera, CNN, ABC, CBS, NBC |
+| `institutional` | +12 | `.edu`, `.ac.uk`, `.org` |
+| `reference` | +8 | Wikipedia, Britannica, Our World in Data |
+| `other` | +0 | All remaining domains |
+
+### Recency scores
+
+Recency scoring differs based on whether the claim is time-sensitive:
+
+**Time-sensitive claims** — recency is weighted heavily:
+
+| Recency label | Age threshold | Score |
+|---|---|---|
+| `fresh` | ≤ 30 hours | +20 |
+| `recent` | ≤ 7 days | +12 |
+| `aging` | ≤ 30 days | −3 |
+| `stale` | > 30 days | −16 |
+| `unknown` | no date | −6 |
+
+**Non-time-sensitive claims** — recency is a lighter signal:
+
+| Recency label | Age threshold | Score |
+|---|---|---|
+| `fresh` or `recent` | ≤ 30 days | +8 |
+| `aging` | ≤ 180 days | +2 |
+| `stale` | > 180 days | −5 |
+| `unknown` | no date | 0 |
+
+After scoring, results are deduplicated by canonical URL and capped at **2 results per domain**, then the top 5 sources are selected.
+
+## Step 5 — Extract (Deep Content Retrieval)
+
+The standard Tavily search returns short snippets. When evidence quality is insufficient, TruthLens calls the Tavily **extract** API to fetch up to 700 characters of full page content from the top 3 URLs.
+
+Extract is triggered when any of the following conditions is true:
+
+- Evidence consistency is not `consistent` (i.e., it is `mixed` or `sparse`)
+- Any selected source has a snippet shorter than 140 characters
+- The claim is both time-sensitive **and** high-stake
+- Any selected source is of type `official`
+
+When extract runs, its content replaces the short snippet for that citation in the evidence pack. Extract uses `advanced` depth for time-sensitive claims and `basic` for others.
+
+## Step 6 — Context Pack Format
+
+The structured evidence pack injected into the model prompt looks like this:
+
+```text
+LIVE_WEB_GROUNDING_PACK
+retrieved_at: 2025-03-24T10:45:00.000Z
+time_sensitive_claim: yes
+evidence_consistency: mixed
+official_sources_found: yes
+stale_evidence_detected: no
+search_queries:
+- Dubai curfew tonight emergency meeting
+- Dubai UAE official statement verified report today
+- Dubai curfew tonight latest updates March 24, 2025
+sources:
+[1] title: UAE authorities deny Dubai curfew rumours
+url: https://www.reuters.com/...
+domain: reuters.com
+published_at: 2025-03-24T09:12:00Z
+source_type: major-news
+recency: fresh
+snippet: UAE officials have denied social media claims of an imminent citywide curfew...
+```
+
+The model is instructed to treat this pack as its primary evidence source for time-sensitive or fast-moving claims and to explicitly note recency, source quality, and verification gaps in its output.
+
+## Grounding Metadata in Results
+
+Every `AnalysisResult` includes a `grounding` object with:
+
+```typescript
+{
+  attempted: boolean;       // whether grounding was attempted
+  succeeded: boolean;       // whether at least one citation was returned
+  searchQueries: string[];  // the queries that were run
+  usedExtract: boolean;     // whether the extract API was called
+  warning: string | null;   // first warning if grounding partially failed
+  retrievedAt: string;      // ISO timestamp of when grounding ran
+  isTimeSensitive: boolean; // how the claim was classified
+}
+```
+
+<Warning>
+  If the claim is time-sensitive and all retrieved sources are stale, TruthLens adds a warning: `"Most retrieved sources are not recent for this time-sensitive claim. Confidence should be reduced."` This warning is surfaced in the UI.
+</Warning>

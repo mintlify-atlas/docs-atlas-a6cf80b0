@@ -1,0 +1,184 @@
+---
+title: Fallback Logic
+description: How TruthLens stays available — the four-layer fallback chain from Gemini through heuristic analysis.
+---
+
+TruthLens is designed so that a failure in any individual AI provider does not leave users without a result. The backend implements a four-layer fallback chain. Each layer is only reached if the one above it fails.
+
+## Fallback chain overview
+
+```
+Layer 1 — Gemini (primary)
+  ↓ any non-404 error
+Layer 2 — Azure AI Foundry / Llama 3.1 8B
+  ↓ FoundryPolicyBlockedError
+Layer 3 — Heuristic analysis
+  ↓ any other uncaught error
+Layer 4 — Default result (HTTP 500)
+```
+
+---
+
+## Layer 1: Gemini
+
+The primary analysis path tries Google Gemini models in order:
+
+```typescript
+const MODEL_CANDIDATES = [
+  process.env.GEMINI_MODEL,   // optional env override
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
+].filter(Boolean);
+```
+
+The loop exits early in two cases:
+
+- **404 error** (model not found / not available in the configured region) — iteration continues to the next candidate in the list.
+- **Any other error** — iteration stops and the error propagates to the Foundry fallback handler.
+
+If all candidates are exhausted by 404s, the last error is re-thrown and Foundry is attempted.
+
+<Note>
+  Set `GEMINI_MODEL` in your environment to pin a specific model version (e.g. a preview or experimental variant) without modifying source code. If that model returns a 404, the pipeline automatically falls through to `gemini-2.5-flash`.
+</Note>
+
+---
+
+## Layer 2: Azure AI Foundry / Llama 3.1 8B
+
+If Gemini fails for any reason other than a recoverable 404, `runFoundryAnalysis(prompt)` is called with `meta/Meta-Llama-3.1-8B-Instruct` via the Azure AI Inference API.
+
+Foundry uses the same `SYSTEM_INSTRUCTION` and the same grounded prompt as Gemini, so the output format is identical.
+
+**Required environment variables:**
+
+```bash
+AZURE_AI_FOUNDRY_ENDPOINT=https://your-resource.services.ai.azure.com
+AZURE_AI_FOUNDRY_API_KEY=your_key_here
+```
+
+Alternative aliases are also supported: `AZURE_FOUNDRY_ENDPOINT` / `FOUNDRY_ENDPOINT` and `AZURE_FOUNDRY_API_KEY` / `FOUNDRY_API_KEY`. The first non-empty value found is used.
+
+### Policy block detection
+
+If Foundry returns an error response, the message is inspected for policy-blocked language:
+
+```typescript
+function isFoundryPolicyBlockedMessage(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes("content management policy") ||
+    (text.includes("filtered") && text.includes("policy")) ||
+    text.includes("responsible ai policy")
+  );
+}
+```
+
+If the message matches any of these patterns, a `FoundryPolicyBlockedError` is thrown. This is treated differently from a generic Foundry error — it routes to the heuristic fallback rather than propagating upward as an unrecoverable failure.
+
+Generic Foundry errors (network failure, authentication failure, quota exceeded, etc.) are re-thrown and caught by the outermost try/catch, producing a Layer 4 default result.
+
+<Warning>
+  If `AZURE_AI_FOUNDRY_ENDPOINT` or `AZURE_AI_FOUNDRY_API_KEY` are not set, Foundry throws immediately with a configuration error and the pipeline falls to Layer 4. Configure both variables to keep Layer 2 available.
+</Warning>
+
+---
+
+## Layer 3: Heuristic fallback
+
+When Foundry blocks a request on policy grounds, `buildPolicyFallbackAnalysis(text, reason)` runs a lightweight, rule-based analysis entirely in-process — no model call required.
+
+### What it checks
+
+**Urgency / fear framing** — flags `"Emotional Language"` if any of these appear in the input:
+
+```
+breaking, urgent, immediately, right now, before,
+move your money, prepare now
+```
+
+**Vague or unnamed sourcing** — flags `"Weak Sourcing"` if any of these appear:
+
+```
+insiders, sources say, they say, officials are hiding,
+unnamed, experts shocked
+```
+
+**Overconfident certainty language** — flags `"Overconfident Framing"` if any of these appear:
+
+```
+proves, guaranteed, always, never, shocked, admit,
+refuse to cover
+```
+
+**Missing context** — always appended as a fourth flag:
+
+> "Independent context, timeline detail, and primary-source support are required before trusting this claim."
+
+### Credibility score assignment
+
+| Flags detected | Score |
+|---|---|
+| 3 or more | `High-risk / likely misleading` |
+| Fewer than 3 | `Mixed / use caution` |
+
+### Fixed summary and next steps
+
+The heuristic result always sets:
+
+- **Summary**: `"Automated provider analysis was safety-filtered, so this is a conservative heuristic assessment. Verify with primary sources."`
+- **Source notes**: `"Primary AI provider output was blocked by content policy for this input. Source quality could not be fully model-evaluated."`
+- **Next steps** (always include the policy block reason):
+  1. Look for at least two independent primary or high-credibility secondary sources.
+  2. Verify names, dates, and quoted evidence directly from original publications.
+  3. Treat urgency/fear language as a signal to slow down verification, not accelerate sharing.
+  4. `Provider note: <foundryError.message>`
+
+After construction, the heuristic result still passes through `mergeGroundingIntoResult`, so Tavily citations and grounding metadata are attached if grounding succeeded earlier in the pipeline.
+
+<Info>
+  The heuristic fallback intentionally errs on the side of caution. It uses `"Mixed / use caution"` as the minimum score because it cannot evaluate claims with the depth of a language model. Users are told explicitly that AI analysis was unavailable.
+</Info>
+
+---
+
+## Layer 4: Default result (HTTP 500)
+
+If an error escapes all three layers above — for example, a network failure during grounding that throws before any model is attempted, or an unexpected exception in Foundry that is not a policy block — the outermost `catch` returns `DEFAULT_ANALYSIS_RESULT` with HTTP 500:
+
+```typescript
+export const DEFAULT_ANALYSIS_RESULT: AnalysisResult = {
+  credibilityScore: "Mixed / use caution",
+  summary: "Analysis is temporarily unavailable.",
+  mainClaims: [],
+  flags: [
+    {
+      type: "System",
+      quote: "",
+      explanation:
+        "The analysis service encountered an issue while processing this request.",
+    },
+  ],
+  sourceNotes: "No source verification could be completed.",
+  contextNotes: "Try again shortly.",
+  nextSteps: ["Retry this request in a few moments."],
+  citations: [],
+  grounding: { attempted: false, succeeded: false, ... },
+  warnings: [],
+};
+```
+
+If grounding completed before the failure, its data is merged into the default result so citations are not silently discarded.
+
+---
+
+## Why this matters
+
+Content moderation policies on AI providers are not uniform or predictable — a claim that passes on one provider may be blocked on another, or blocked on different days depending on policy updates. The heuristic layer ensures:
+
+1. Users always receive a structured response with at least some signal flags.
+2. The response transparently communicates that AI analysis was unavailable and why.
+3. Tavily-grounded citations are preserved and surfaced even when the model path failed.
+
+The full chain means TruthLens degrades gracefully across all failure modes rather than returning an empty error page.

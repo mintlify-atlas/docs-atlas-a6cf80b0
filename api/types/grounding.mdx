@@ -1,0 +1,113 @@
+---
+title: AnalysisGrounding
+description: Metadata produced by the Tavily web-grounding pipeline that describes how live evidence retrieval ran for a given analysis request.
+---
+
+## TypeScript interface
+
+```typescript
+export interface AnalysisGrounding {
+  attempted: boolean;
+  succeeded: boolean;
+  searchQueries: string[];
+  usedExtract: boolean;
+  warning: string | null;
+  retrievedAt: string;
+  isTimeSensitive: boolean;
+}
+```
+
+## Fields
+
+<ResponseField name="attempted" type="boolean" required>
+  `true` when the grounding pipeline was invoked for this request — i.e., the `buildTavilyGrounding` function ran and at least tried to search. `false` only in the fallback case where `normalizeAnalysisResult` short-circuits to `DEFAULT_ANALYSIS_RESULT` before grounding could run, or when grounding was intentionally skipped.
+</ResponseField>
+
+<ResponseField name="succeeded" type="boolean" required>
+  `true` when grounding produced at least one usable citation. A run can be `attempted: true` and `succeeded: false` when:
+
+  - `TAVILY_API_KEY` is not configured
+  - All Tavily search requests failed
+  - No results passed the URL + content filter
+  - Deduplication and source selection produced an empty list
+</ResponseField>
+
+<ResponseField name="searchQueries" type="string[]" required>
+  The search query strings that were (or would have been) submitted to Tavily. Built by `buildSearchQueries` from the input text using entity extraction, claim condensation, and temporal modifiers.
+
+  Up to three queries are generated per request. May be an empty array if the input text could not yield valid query strings (minimum 16 characters after sanitisation).
+</ResponseField>
+
+<ResponseField name="usedExtract" type="boolean" required>
+  `true` when Tavily's extract API was called in addition to search, and returned at least one result. Extract is used to retrieve fuller page content for the top-ranked sources when the initial search snippets are insufficient. See [when extract is used](#when-extract-is-used).
+</ResponseField>
+
+<ResponseField name="warning" type="string | null" required>
+  The first system-level warning message generated during this grounding run, or `null` for a clean run. This is a convenience copy of `AnalysisResult.warnings[0]`. The full list of warnings is available on `AnalysisResult.warnings`.
+
+  Maximum length: 240 characters.
+</ResponseField>
+
+<ResponseField name="retrievedAt" type="string" required>
+  ISO 8601 timestamp (e.g. `"2024-11-03T14:22:00.000Z"`) recording when grounding ran. Used as the reference point for all recency calculations on citations. Empty string in `DEFAULT_ANALYSIS_RESULT`.
+</ResponseField>
+
+<ResponseField name="isTimeSensitive" type="boolean" required>
+  `true` when the input claim was classified as time-sensitive by `classifyClaim`. Affects search depth, result freshness requirements, and recency scoring. See [time-sensitive classification](#time-sensitive-classification).
+</ResponseField>
+
+## Time-sensitive classification
+
+The `isTimeSensitive` flag is set by `classifyClaim`, which scans the input text (case-insensitive) for several categories of signals. A claim is considered time-sensitive when **any** of the following conditions is true:
+
+**`TIME_SENSITIVE_TERMS` match** — any of:
+`today`, `tonight`, `right now`, `breaking`, `just announced`, `live`, `latest`, `currently`, `this morning`, `this evening`, `urgent`, `now`, `within hours`, `immediately`
+
+**`BREAKING_TERMS` match** — any of:
+`breaking`, `developing`, `just in`, `emergency`, `confirmed now`, `alert`, `evacuation`, `shutdown`, `lockdown`, `curfew`
+
+**`HIGH_STAKE_TERMS` match** — any of:
+`war`, `missile`, `strike`, `attack`, `election`, `resigned`, `resignation`, `appointed`, `killed`, `died`, `earthquake`, `flood`, `wildfire`, `outbreak`, `health advisory`, `sanction`, `ruling`, `supreme court`, `market crash`, `bank run`, `flight cancelled`, `airline disruption`, `product recall`, `service outage`
+
+**ISO date pattern** — matches `\b20\d{2}-\d{2}-\d{2}\b` (e.g. `2025-03-15`)
+
+**Short date pattern** — matches formats such as `3/15`, `15-3-2025`, or `March 15`
+
+When `isTimeSensitive` is `true`, the Tavily search uses `searchDepth: "advanced"`, `topic: "news"`, up to 8 results per query, and a `timeRange` of `"day"` (breaking) or `"week"` (other time-sensitive). Recency thresholds for citation scoring also tighten significantly.
+
+## When extract is used
+
+`usedExtract` becomes `true` when the Tavily extract API is called and returns at least one result. Extract is triggered when `shouldUseExtract` returns `true` for the selected sources, which happens when **any** of these conditions holds:
+
+- **Sparse evidence** — fewer than two sources were selected, or (for time-sensitive claims) fewer than two are `fresh` or `recent`
+- **Short snippets** — any selected source has a snippet shorter than 140 characters
+- **Official sources present** — at least one source is classified as `"official"`, warranting deeper content retrieval
+- **High-stake and time-sensitive** — the claim matches both `isHighStake` and `isTimeSensitive` simultaneously
+
+When extract runs, up to three URLs are selected (prioritised by source type: official > major-news > institutional > reference > other), and the extracted `rawContent` is merged back into the source's snippet, capped at 320 characters in the final citation.
+
+## Example
+
+```json
+{
+  "attempted": true,
+  "succeeded": true,
+  "searchQueries": [
+    "WHO declares mpox public health emergency August 2024",
+    "WHO PHEIC mpox declaration official statement today",
+    "WHO mpox outbreak latest updates August 14, 2024"
+  ],
+  "usedExtract": true,
+  "warning": null,
+  "retrievedAt": "2024-08-14T18:45:00.000Z",
+  "isTimeSensitive": true
+}
+```
+
+<Note>
+  `warning` holds only the first warning string. If multiple warnings were produced — for example, a partial search failure followed by a stale-evidence warning — the complete list is available on `AnalysisResult.warnings`.
+</Note>
+
+<Tip>
+  Check `grounding.succeeded` before presenting citations in a UI. When it is `false`, `citations` will be an empty array and the analysis is based entirely on the model's parametric knowledge. Consider surfacing a notice to users in this case, particularly for time-sensitive claims.
+</Tip>

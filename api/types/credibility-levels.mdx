@@ -1,0 +1,144 @@
+---
+title: Credibility Levels
+description: The five canonical credibility levels, their numeric score proxies, display configuration, and the getCredibilityConfig helper used to resolve UI properties from a verdict string.
+---
+
+## CREDIBILITY_LEVELS constant
+
+```typescript
+export const CREDIBILITY_LEVELS = [
+  "Credible",
+  "Mostly credible",
+  "Mixed / use caution",
+  "Weakly supported",
+  "High-risk / likely misleading",
+] as const;
+
+export type CredibilityLevel = (typeof CREDIBILITY_LEVELS)[number];
+```
+
+The model is instructed to output exactly one of these five strings as `credibilityScore`. The `as const` assertion narrows the array to a readonly tuple, allowing the `CredibilityLevel` union type to be derived automatically without duplication.
+
+## CredibilityConfig interface
+
+```typescript
+export interface CredibilityConfig {
+  label: string;
+  score: number;
+  guidance: string;
+  tone: "strong" | "positive" | "mixed" | "caution" | "risk" | "neutral";
+}
+```
+
+<ResponseField name="label" type="string" required>
+  The display label for the level — identical to the `CredibilityLevel` value it maps to, or `"Mixed / use caution"` for the neutral fallback.
+</ResponseField>
+
+<ResponseField name="score" type="number" required>
+  A numeric proxy (0–100) representing the approximate credibility confidence for this level. Used for progress bars and other visual representations. Not a probability — treat it as a relative position on the credibility scale.
+</ResponseField>
+
+<ResponseField name="guidance" type="string" required>
+  A short sentence summarising what the level means and how the reader should act on it. Suitable for tooltips and contextual help text.
+</ResponseField>
+
+<ResponseField name="tone" type="string" required>
+  A semantic tone token used to select colour schemes and iconography in the UI. One of: `"strong"`, `"positive"`, `"mixed"`, `"caution"`, `"risk"`, or `"neutral"` (fallback only).
+</ResponseField>
+
+## CREDIBILITY_CONFIG
+
+```typescript
+export const CREDIBILITY_CONFIG: Record<string, CredibilityConfig> = {
+  Credible: {
+    label: "Credible",
+    score: 88,
+    guidance:
+      "Evidence quality appears strong with consistent sourcing and limited manipulation signals.",
+    tone: "strong",
+  },
+  "Mostly credible": {
+    label: "Mostly credible",
+    score: 73,
+    guidance:
+      "Most signals look reliable, but a few details still deserve direct verification.",
+    tone: "positive",
+  },
+  "Mixed / use caution": {
+    label: "Mixed / use caution",
+    score: 55,
+    guidance:
+      "Some claims may be plausible, but sourcing and context are uneven.",
+    tone: "mixed",
+  },
+  "Weakly supported": {
+    label: "Weakly supported",
+    score: 33,
+    guidance:
+      "Evidence appears thin or indirect. Treat this content as tentative.",
+    tone: "caution",
+  },
+  "High-risk / likely misleading": {
+    label: "High-risk / likely misleading",
+    score: 16,
+    guidance:
+      "Several risk signals suggest the claim may be manipulative or unreliable.",
+    tone: "risk",
+  },
+};
+```
+
+## Level reference table
+
+| Level | Score | Tone | Guidance |
+|---|---|---|---|
+| Credible | 88 | `strong` | Evidence quality appears strong with consistent sourcing and limited manipulation signals. |
+| Mostly credible | 73 | `positive` | Most signals look reliable, but a few details still deserve direct verification. |
+| Mixed / use caution | 55 | `mixed` | Some claims may be plausible, but sourcing and context are uneven. |
+| Weakly supported | 33 | `caution` | Evidence appears thin or indirect. Treat this content as tentative. |
+| High-risk / likely misleading | 16 | `risk` | Several risk signals suggest the claim may be manipulative or unreliable. |
+
+## Neutral fallback config
+
+When the model returns a `credibilityScore` that does not match any of the five canonical values, `getCredibilityConfig` returns a neutral fallback instead of throwing:
+
+```typescript
+const NEUTRAL_CONFIG: CredibilityConfig = {
+  label: "Mixed / use caution",
+  score: 50,
+  guidance:
+    "The model could not confidently classify this result. Review the evidence directly.",
+  tone: "neutral",
+};
+```
+
+The fallback `label` is replaced with the raw `level` string if it is non-empty, so callers always receive a displayable label regardless of model output quality.
+
+## getCredibilityConfig
+
+```typescript
+export function getCredibilityConfig(level: string): CredibilityConfig
+```
+
+Looks up the `CredibilityConfig` for a given level string. Safe to call with any string value, including unexpected model output.
+
+- If `level` matches a key in `CREDIBILITY_CONFIG`, that config is returned.
+- Otherwise, the neutral fallback is returned with `label` set to `level` (or `"Mixed / use caution"` if `level` is an empty string).
+
+```typescript
+// Recognised level
+getCredibilityConfig("Credible");
+// → { label: "Credible", score: 88, guidance: "...", tone: "strong" }
+
+// Unrecognised level
+getCredibilityConfig("Partially verified");
+// → { label: "Partially verified", score: 50, guidance: "...", tone: "neutral" }
+
+// Empty string
+getCredibilityConfig("");
+// → { label: "Mixed / use caution", score: 50, guidance: "...", tone: "neutral" }
+```
+
+<Tip>
+  Always use `getCredibilityConfig` rather than indexing directly into `CREDIBILITY_CONFIG`. It handles unrecognised values gracefully, which is important because the model can occasionally return unexpected strings even with strict prompting.
+</Tip>

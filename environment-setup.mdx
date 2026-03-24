@@ -1,0 +1,162 @@
+---
+title: Environment variables
+description: Complete reference for every environment variable used by TruthLens, including required keys, optional fallbacks, and the Azure AI Foundry alias system.
+---
+
+TruthLens reads all configuration from environment variables at runtime. Create a `.env.local` file in the project root to supply these values during local development. In production, set them through your hosting platform's environment configuration.
+
+<Warning>
+  Never commit `.env.local` or any file containing real API keys to version control. Add `.env.local` to your `.gitignore`. Exposed keys can be used by third parties to incur charges on your account or exhaust your quota.
+</Warning>
+
+---
+
+## Quick-reference template
+
+Copy this into `.env.local` and fill in your real values.
+
+```bash .env.local
+# ── Gemini (required) ─────────────────────────────────────────────────────────
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
+
+# ── Tavily (recommended) ──────────────────────────────────────────────────────
+TAVILY_API_KEY=your_tavily_api_key_here
+
+# ── Azure AI Foundry (recommended) ───────────────────────────────────────────
+AZURE_AI_FOUNDRY_ENDPOINT=https://your-foundry-endpoint.inference.ai.azure.com
+AZURE_AI_FOUNDRY_API_KEY=your_foundry_api_key_here
+```
+
+---
+
+## Gemini
+
+Gemini is the **primary analysis model**. TruthLens always attempts Gemini first. If `GEMINI_API_KEY` is not set, the Gemini path will throw an error and the system falls back to Azure AI Foundry.
+
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Yes | Your Google AI Studio API key. Used to authenticate all Gemini requests. |
+| `GEMINI_MODEL` | No | The Gemini model to use as the first candidate. Defaults to trying `gemini-2.5-flash` then `gemini-2.0-flash` then `gemini-2.5-flash-lite` automatically. |
+
+### Model candidate resolution
+
+If `GEMINI_MODEL` is set, that model is tried first. If the specified model returns a 404, the route automatically falls through to the next candidate in order:
+
+```
+[GEMINI_MODEL env var] → gemini-2.5-flash → gemini-2.0-flash → gemini-2.5-flash-lite
+```
+
+This means even if you pin a specific model and it is unavailable, TruthLens will continue rather than fail.
+
+### Getting a Gemini API key
+
+Go to [Google AI Studio](https://aistudio.google.com), sign in, and create an API key. Free-tier access is available.
+
+---
+
+## Tavily
+
+Tavily provides **live web grounding** — real-time search that retrieves current evidence before the analysis model runs. Without a Tavily key, grounding is skipped and the model relies entirely on its training data, which may be stale for time-sensitive claims.
+
+| Variable | Required | Description |
+|---|---|---|
+| `TAVILY_API_KEY` | No | Your Tavily API key. Enables live web search grounding. If omitted, grounding is disabled and `grounding.attempted` will be `false` in results. |
+
+### What grounding does
+
+When a Tavily key is present, the analysis route:
+
+1. Classifies the submitted text as time-sensitive or not
+2. Runs a targeted web search using Tavily
+3. Builds a grounding context pack from the retrieved results
+4. Injects that pack into the model prompt as `LIVE_WEB_GROUNDING_PACK`
+5. Merges retrieved citations into the final result
+
+The `grounding` field in the response surface shows whether grounding was attempted, whether it succeeded, how many sources were checked, and when retrieval occurred.
+
+### Getting a Tavily API key
+
+Go to [app.tavily.com](https://app.tavily.com), sign in or create an account, and copy a key from your dashboard. Tavily provides 1,000 free API credits per month with no credit card required.
+
+---
+
+## Azure AI Foundry
+
+Azure AI Foundry hosts the **Llama 3.1 8B Instruct** model used as a fallback when Gemini fails. If neither `AZURE_AI_FOUNDRY_ENDPOINT` nor any of its aliases are set, the Foundry fallback path will throw a configuration error and TruthLens will fall back to the heuristic analyzer.
+
+| Variable | Required | Description |
+|---|---|---|
+| `AZURE_AI_FOUNDRY_ENDPOINT` | No* | The inference endpoint for your Azure AI Foundry deployment. |
+| `AZURE_AI_FOUNDRY_API_KEY` | No* | The API key for your Azure AI Foundry deployment. |
+
+*Required only if you want the Llama 3.1 fallback path to be available.
+
+### Alias variables
+
+The route reads endpoint and key from the first defined variable in each alias group. This lets you use whichever naming convention suits your infrastructure:
+
+**Endpoint** (checked in this order):
+```
+AZURE_AI_FOUNDRY_ENDPOINT → AZURE_FOUNDRY_ENDPOINT → FOUNDRY_ENDPOINT
+```
+
+**API key** (checked in this order):
+```
+AZURE_AI_FOUNDRY_API_KEY → AZURE_FOUNDRY_API_KEY → FOUNDRY_API_KEY
+```
+
+All three endpoint aliases and all three key aliases are fully supported. Use whichever name your platform or secret manager already has set.
+
+<Note>
+  The Foundry model is always `meta/Meta-Llama-3.1-8B-Instruct`. This is hardcoded in `route.ts` and is not configurable via environment variables.
+</Note>
+
+### Getting Azure AI Foundry credentials
+
+1. Go to [ai.azure.com](https://ai.azure.com) and sign in.
+2. Create or open an AI Foundry project.
+3. Deploy the **Meta-Llama-3.1-8B-Instruct** model from the model catalog.
+4. Copy the inference endpoint URL and the API key from the deployment detail page.
+
+---
+
+## How the fallback chain uses these variables
+
+The three configuration areas map directly to the three-layer fallback chain:
+
+```
+1. Tavily grounding  →  TAVILY_API_KEY
+2. Gemini analysis   →  GEMINI_API_KEY + GEMINI_MODEL
+3. Foundry fallback  →  AZURE_AI_FOUNDRY_ENDPOINT + AZURE_AI_FOUNDRY_API_KEY
+4. Heuristic fallback  (no configuration required — always available)
+```
+
+If only `GEMINI_API_KEY` is set, TruthLens will analyze without live grounding and without the Llama fallback. This is the minimal working configuration.
+
+If all four variables (or their aliases) are set, TruthLens runs with full capability: live grounding, Gemini primary analysis, Llama fallback, and heuristic safety net.
+
+---
+
+## All variables at a glance
+
+| Variable | Alias 1 | Alias 2 | Purpose | Required |
+|---|---|---|---|---|
+| `GEMINI_API_KEY` | — | — | Authenticate Gemini API calls | Yes |
+| `GEMINI_MODEL` | — | — | Override the first Gemini model candidate | No |
+| `TAVILY_API_KEY` | — | — | Enable live web grounding via Tavily | No |
+| `AZURE_AI_FOUNDRY_ENDPOINT` | `AZURE_FOUNDRY_ENDPOINT` | `FOUNDRY_ENDPOINT` | Foundry inference endpoint URL | No |
+| `AZURE_AI_FOUNDRY_API_KEY` | `AZURE_FOUNDRY_API_KEY` | `FOUNDRY_API_KEY` | Foundry API key | No |
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the dev server and submit your first analysis
+  </Card>
+  <Card title="Fallback logic" icon="layers" href="/how-it-works/fallback-logic">
+    Understand how Gemini, Foundry, and heuristic paths interact
+  </Card>
+</CardGroup>

@@ -1,0 +1,91 @@
+---
+title: Comparison Mode
+description: Analyze two pieces of content side-by-side using the same credibility rubric to inspect differences in claims, sourcing quality, and framing.
+---
+
+Comparison mode runs two independent TruthLens analyses in parallel and presents both results side-by-side. It is designed for situations where you want to apply the same credibility standard to two competing narratives before deciding which to trust or cite.
+
+## When to Use Comparison Mode
+
+<CardGroup cols={2}>
+  <Card title="Original vs. shared version" icon="copy">
+    Compare the original article or statement against a version that has been paraphrased, screenshot, or reposted to detect whether key context, caveats, or sourcing was stripped out.
+  </Card>
+
+  <Card title="Two articles on the same story" icon="newspaper">
+    Analyze coverage from two different outlets or sources to surface differences in framing, claim specificity, and evidence quality.
+  </Card>
+
+  <Card title="Rumor vs. official statement" icon="building-columns">
+    Paste an unverified social post on the left and an official announcement or news report on the right to see how their credibility signals compare directly.
+  </Card>
+
+  <Card title="Before and after editing" icon="pen-to-square">
+    Check whether a correction or updated version of a claim meaningfully changes the credibility score relative to an earlier draft.
+  </Card>
+</CardGroup>
+
+## URL and Navigation
+
+Comparison mode is available at `/compare`. The page accepts two optional query parameters that pre-load example content into each side:
+
+```
+/compare?left=<example-id>&right=<example-id>
+```
+
+The supported example IDs are: `viral-breakthrough`, `loaded-policy-thread`, `balanced-press-release`, `sensational-headline`. See [Sample Analyses](/features/sample-analyses) for their full content.
+
+## Workflow
+
+1. **Navigate to `/compare`** — both text areas are pre-filled with a default rumor-vs-official-statement pair to illustrate the contrast.
+
+2. **Paste your two texts** — enter the first piece of content in the left panel and the second in the right panel. Both panels support resizable text areas.
+
+3. **Click "Run side-by-side analysis"** — TruthLens calls `POST /api/analyze` for both sides simultaneously using `Promise.allSettled`, so one slow or failing side does not block the other.
+
+4. **Review the results** — each panel displays a compact `AnalysisResultView` with the credibility score, summary, flags, and source notes. The same five-level scoring system and live grounding pipeline applies to both sides.
+
+5. **Reset or revise** — the Reset button restores both panels to their initial state. You can update either text area at any time and run the comparison again.
+
+## Default Example
+
+The comparison page ships with a built-in contrast to demonstrate the difference between unverified rumor and an official announcement:
+
+**Left (rumor):**
+> Breaking: insiders claim the national power grid will fail this weekend, but officials are hiding the timeline.
+
+**Right (official):**
+> The utility board announced a scheduled maintenance window this weekend. Officials published a timeline and outage map for specific neighborhoods.
+
+These two inputs are designed to score very differently — the left will typically flag emotional language, weak sourcing, and missing context, while the right will reflect structured, attributable sourcing.
+
+## Result Display in Comparison Mode
+
+Each side renders a compact version of the standard analysis result, showing:
+
+- Credibility score label and numeric value
+- Summary paragraph
+- Extracted main claims
+- Detected flags with quotes and explanations
+- Source notes
+- Context notes
+- Next steps checklist
+- Live grounding citations (when Tavily is configured)
+
+<Info>
+  Because both analyses run in parallel, the completion time is approximately equal to the slower of the two individual analyses — not their sum. If one side errors, the other side's result is still displayed.
+</Info>
+
+## Comparing Credibility Scores
+
+The most direct comparison is the numeric score for each side. Scores are derived from the five credibility levels:
+
+| Level | Score |
+|---|---|
+| Credible | 88 |
+| Mostly credible | 73 |
+| Mixed / use caution | 55 |
+| Weakly supported | 33 |
+| High-risk / likely misleading | 16 |
+
+A large score gap between two versions of the same story is a strong signal that one of them contains manipulation, missing context, or unsupported framing that the other does not. Review the flag lists on both sides to pinpoint the specific differences.

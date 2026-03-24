@@ -1,0 +1,85 @@
+---
+title: Introduction
+description: TruthLens is an explainable credibility analysis platform for headlines, articles, and social posts.
+---
+
+## What is TruthLens?
+
+TruthLens helps you understand **why** a piece of content should be trusted, questioned, or verified — not just whether it passes a binary true/false check.
+
+Online misinformation is rarely completely fabricated. More often, it is weakly sourced, emotionally manipulative, missing key context, or framed to mislead. TruthLens is built to slow that process down and surface the signals that matter.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get TruthLens running locally in minutes
+  </Card>
+  <Card title="How It Works" icon="diagram-project" href="/how-it-works/overview">
+    Understand the analysis pipeline end to end
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Integrate TruthLens into your own tools
+  </Card>
+  <Card title="Core Features" icon="shield-check" href="/features/credibility-analysis">
+    Explore what TruthLens analyzes and surfaces
+  </Card>
+</CardGroup>
+
+## Key capabilities
+
+<CardGroup cols={2}>
+  <Card title="Explainable credibility scoring" icon="chart-bar">
+    Five-level credibility scale with per-claim rationale — not just a number
+  </Card>
+  <Card title="Live web grounding" icon="globe">
+    Tavily-powered real-time search grounds analysis in current evidence for time-sensitive claims
+  </Card>
+  <Card title="Multi-model resilience" icon="layers">
+    Gemini primary path with Azure AI Foundry / Llama 3.1 fallback ensures continuous availability
+  </Card>
+  <Card title="Structured output" icon="list">
+    Every analysis returns claims, flags, source notes, context notes, next steps, and citations
+  </Card>
+  <Card title="Comparison mode" icon="columns">
+    Analyze two pieces of content side by side to surface divergence in framing and sourcing
+  </Card>
+  <Card title="Sample analyses" icon="flask">
+    Curated examples show how TruthLens reasons through different content types
+  </Card>
+</CardGroup>
+
+## Who is it for?
+
+TruthLens is built for anyone who needs signal clarity before sharing, citing, or publishing:
+
+- **Students** — verify sources before using them in research
+- **Journalists** — flag weak sourcing and emotional framing quickly
+- **Researchers** — inspect claims for context gaps and unsupported assertions
+- **Educators** — teach critical reading with real examples
+- **Everyday readers** — slow down before resharing something viral
+
+## What TruthLens analyzes
+
+When you submit text, TruthLens evaluates:
+
+- **Main claims** — what assertions is the content actually making?
+- **Warning flags** — emotional language, weak sourcing, overconfident framing, missing context
+- **Source quality** — are sources named, official, or verifiable?
+- **Context gaps** — what baselines, timelines, or comparisons are absent?
+- **Next steps** — concrete actions to verify or challenge the content
+- **Live citations** — web-grounded sources retrieved at analysis time
+
+## Tech stack
+
+TruthLens is a Next.js application with a self-contained API layer:
+
+| Layer | Technologies |
+|---|---|
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS |
+| Primary AI | Google Gemini (`@google/generative-ai`) |
+| Fallback AI | Azure AI Foundry — Llama 3.1 8B (`@azure-rest/ai-inference`) |
+| Web grounding | Tavily (`@tavily/core`) |
+| Database | Convex |
+
+<Note>
+TruthLens was created as a hackathon project. It is open source under the Unlicense and designed to be self-hosted.
+</Note>

@@ -1,0 +1,98 @@
+---
+title: Overview
+description: End-to-end user journey and system architecture for TruthLens credibility analysis.
+---
+
+TruthLens is an explainable credibility analysis platform. When you paste a headline, article, or post, the system runs a multi-stage pipeline — live web grounding, AI analysis, and structured normalization — and returns a detailed, citation-backed result rather than a single opaque score.
+
+This page explains the three-step user journey and how the frontend and backend work together.
+
+## User journey
+
+<Steps>
+  <Step title="Paste content">
+    Drop in a headline, article excerpt, post, or thread exactly as you encountered it. The workspace supports three input modes — **Headline**, **Article**, and **Post** — and optionally accepts a source URL that is prepended to the payload as reference context.
+
+    The frontend performs no pre-processing on your text. The raw content (with optional URL prefix) is sent directly to the analysis API, so the model sees the same framing you did.
+  </Step>
+
+  <Step title="Analyse credibility signals">
+    TruthLens evaluates claims, sourcing, framing, and context using a transparent rubric. Behind the scenes this step involves:
+
+    - **Live web grounding** via Tavily — the claim is classified, search queries are generated, live sources are retrieved and ranked, and a grounding evidence pack is injected into the model prompt.
+    - **AI analysis** — Google Gemini receives a structured prompt containing today's date, the grounding pack, and calibration instructions. If Gemini is unavailable, Azure AI Foundry (Llama 3.1 8B) is used as a fallback.
+    - **Result normalization** — the model output is parsed and validated into a consistent `AnalysisResult` shape regardless of which provider responded.
+
+    See [Analysis Pipeline](/how-it-works/analysis-pipeline) for the full step-by-step breakdown.
+  </Step>
+
+  <Step title="Decide what to trust">
+    You receive a structured readout of what looks reliable, what is weak, and what to verify next. The result includes:
+
+    - A **credibility score** from one of five levels
+    - A concise **summary** of the overall assessment
+    - **Extracted claims** from the submitted text
+    - **Risk flags** with quoted evidence and explanations
+    - **Source quality notes** and **context gap notes**
+    - **Actionable next steps** for verification
+    - **Citations** — the live sources checked during grounding
+    - **Grounding metadata** — whether live retrieval succeeded and which queries were used
+  </Step>
+</Steps>
+
+## System architecture
+
+```
+Browser (Next.js client)
+  │
+  │  POST /api/analyze  { text: "..." }
+  ▼
+Next.js Route Handler  (src/app/api/analyze/route.ts)
+  │
+  ├─ 1. Validate request body
+  │
+  ├─ 2. Build Tavily grounding
+  │       classifyClaim → buildSearchQueries → runSearches
+  │       → rankSearchResult → dedupeAndSelectSources
+  │       → (optional) extract → formatPromptContext
+  │
+  ├─ 3. Build grounded prompt
+  │       buildGroundedPrompt(text, today, groundingContext)
+  │
+  ├─ 4. Run Gemini analysis  ──────────────────────────┐
+  │       MODEL_CANDIDATES loop                         │ success
+  │       (env model → 2.5-flash → 2.0-flash → lite)   │
+  │                                                     ▼
+  ├─ 5. [on Gemini error] Run Foundry analysis    mergeGroundingIntoResult
+  │       meta/Meta-Llama-3.1-8B-Instruct              │
+  │                                                     │
+  ├─ 6. [on Foundry policy block] Heuristic fallback   │
+  │       buildPolicyFallbackAnalysis                   │
+  │                                                     │
+  └─ 7. Normalize + return AnalysisResult ◄────────────┘
+
+Browser
+  └─ Renders AnalysisResultView
+```
+
+## Frontend vs backend responsibilities
+
+| Concern | Where it runs |
+|---|---|
+| Input mode selection (Headline / Article / Post) | Browser |
+| Source URL prepend | Browser (before fetch) |
+| Character count display | Browser |
+| `POST /api/analyze` call | Browser → Server |
+| Tavily web grounding | Server only (`server-only` guard) |
+| Gemini / Foundry inference | Server only |
+| Result normalization | Server (primary) + browser (on receipt) |
+| Citation and grounding display | Browser |
+| Session snapshot (claims count, flags count, etc.) | Browser |
+
+<Note>
+  The Tavily grounding module is marked `import "server-only"` and will never run in the browser. All API keys are accessed exclusively from environment variables on the server.
+</Note>
+
+## What happens when providers are unavailable
+
+TruthLens is designed to stay available even when individual providers fail. A four-layer fallback chain — Gemini → Azure AI Foundry → heuristic analysis → default result — ensures users always receive a structured response. See [Fallback Logic](/how-it-works/fallback-logic) for details.

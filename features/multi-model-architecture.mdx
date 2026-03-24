@@ -1,0 +1,181 @@
+---
+title: Multi-Model Architecture
+description: How TruthLens routes analysis through Gemini, Azure AI Foundry (Llama 3.1 8B), and a heuristic fallback — and how structured output is enforced across all paths.
+---
+
+TruthLens uses a three-layer model architecture to ensure every analysis request returns a well-structured result, even when a primary provider is unavailable or blocked by a content policy.
+
+## Architecture Overview
+
+```
+Request
+  └─ 1. Gemini (primary)
+         ├─ Success → return result
+         └─ Failure
+               └─ 2. Azure AI Foundry / Llama 3.1 8B (secondary)
+                        ├─ Success → return result
+                        ├─ FoundryPolicyBlockedError
+                        │      └─ 3. Heuristic fallback → return conservative result
+                        └─ Hard failure → 500 with DEFAULT_ANALYSIS_RESULT
+```
+
+Tavily grounding runs before all three layers and its evidence pack is passed to whichever model produces the final result.
+
+## Layer 1 — Gemini (Primary)
+
+The primary analysis path uses the Google Gemini API with a model candidate list. TruthLens tries models in order until one succeeds:
+
+```typescript
+const MODEL_CANDIDATES = [
+  process.env.GEMINI_MODEL,   // optional override via environment variable
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+  "gemini-2.5-flash-lite",
+].filter(Boolean);
+```
+
+If a model returns a 404 (not available in the configured region or API tier), TruthLens moves to the next candidate automatically. Any other error short-circuits to the Foundry fallback.
+
+### Structured output enforcement for Gemini
+
+Gemini is configured with `responseMimeType: "application/json"` and a strict `responseSchema` that enforces the exact shape of the output. The schema requires all seven fields and constrains `credibilityScore` to one of the five valid enum values:
+
+```typescript
+credibilityScore: {
+  type: SchemaType.STRING,
+  format: "enum",
+  enum: [
+    "Credible",
+    "Mostly credible",
+    "Mixed / use caution",
+    "Weakly supported",
+    "High-risk / likely misleading",
+  ],
+}
+```
+
+All fields in the schema — `credibilityScore`, `summary`, `mainClaims`, `flags`, `sourceNotes`, `contextNotes`, `nextSteps` — are marked as required.
+
+## Layer 2 — Azure AI Foundry / Llama 3.1 8B (Secondary)
+
+If all Gemini candidates fail, TruthLens falls back to Azure AI Foundry using the model:
+
+```
+meta/Meta-Llama-3.1-8B-Instruct
+```
+
+The Foundry client is configured via environment variables with multiple accepted names for flexibility:
+
+```
+AZURE_AI_FOUNDRY_ENDPOINT  or  AZURE_FOUNDRY_ENDPOINT  or  FOUNDRY_ENDPOINT
+AZURE_AI_FOUNDRY_API_KEY   or  AZURE_FOUNDRY_API_KEY   or  FOUNDRY_API_KEY
+```
+
+If neither endpoint nor API key is configured, the Foundry layer throws immediately and execution falls through to the heuristic fallback.
+
+### Structured output enforcement for Foundry
+
+Foundry does not support the same schema-constrained output as Gemini. Instead, TruthLens requests `response_format: { type: "json_object" }` and uses a multi-stage JSON extraction function that handles:
+
+1. Direct `JSON.parse` on the raw response
+2. Extraction from fenced code blocks (` ```json ... ``` `)
+3. Brace-balanced parsing to recover a JSON object from mixed text
+
+The extracted object is then passed through `normalizeAnalysisResult`, which validates and coerces every field to the expected type, fills in defaults for missing fields, and ensures `credibilityScore` is a non-empty string.
+
+### Content policy blocking
+
+When Azure Foundry's Responsible AI filters block a request, it returns an error containing phrases like `"content management policy"`, `"filtered"` combined with `"policy"`, or `"responsible ai policy"`. TruthLens detects these messages and raises a `FoundryPolicyBlockedError` instead of a generic error:
+
+```typescript
+class FoundryPolicyBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FoundryPolicyBlockedError";
+  }
+}
+```
+
+This distinction matters: a `FoundryPolicyBlockedError` routes to the heuristic fallback rather than returning a 500 error, so the user still receives a structured credibility assessment.
+
+## Layer 3 — Heuristic Fallback
+
+When Foundry is blocked by content policy, `buildPolicyFallbackAnalysis` produces a conservative, rule-based result without calling any language model.
+
+### How heuristic signals work
+
+The function scans the lowercased input for three categories of signals:
+
+**Urgency / fear terms** → adds an `Emotional Language` flag:
+```
+breaking, urgent, immediately, right now, before, move your money, prepare now
+```
+
+**Vague sourcing terms** → adds a `Weak Sourcing` flag:
+```
+insiders, sources say, they say, officials are hiding, unnamed, experts shocked
+```
+
+**Overconfident certainty terms** → adds an `Overconfident Framing` flag:
+```
+proves, guaranteed, always, never, shocked, admit, refuse to cover
+```
+
+A `Missing Context` flag is always appended regardless of other signals.
+
+### Score determination
+
+The heuristic credibility score is determined by flag count:
+
+- **3 or more flags** → `"High-risk / likely misleading"`
+- **Fewer than 3 flags** → `"Mixed / use caution"`
+
+The summary explicitly notes that the result is a conservative heuristic assessment and that the primary AI provider output was safety-filtered.
+
+### Next steps from heuristic
+
+Heuristic results always include these next steps:
+
+1. Look for at least two independent primary or high-credibility secondary sources.
+2. Verify names, dates, and quoted evidence directly from original publications.
+3. Treat urgency/fear language as a signal to slow down verification, not accelerate sharing.
+4. A provider note identifying the specific policy block reason.
+
+<Warning>
+  Heuristic results are conservative by design. They do not reflect a full language model analysis — they reflect only the signals detectable via keyword matching. Treat them as a prompt to seek independent verification, not as a definitive credibility verdict.
+</Warning>
+
+## Result Normalization
+
+All three paths pass through `normalizeAnalysisResult` before the response is returned. This function:
+
+- Validates that every field is present and the correct type
+- Returns safe defaults for missing or malformed fields
+- Coerces flags, citations, and grounding to their exact interface shapes
+- Ensures `mainClaims` and `nextSteps` are clean string arrays with whitespace trimmed
+
+This guarantees that the UI always receives a structurally valid `AnalysisResult` object regardless of which path produced the analysis.
+
+## System Instruction
+
+All three model paths share the same system instruction:
+
+```text
+You are TruthLens, an explainable credibility analysis assistant.
+
+Rules:
+1) Use the LIVE_WEB_GROUNDING_PACK in the prompt as your primary evidence
+   for time-sensitive or fast-moving claims.
+2) Compare the submitted text against grounded evidence and separate
+   supported, unsupported, mixed, and uncertain parts.
+3) In sourceNotes/contextNotes, explicitly mention recency, source quality,
+   official-source presence, and verification gaps.
+4) If evidence is sparse, stale, conflicting, or grounding failed, lower
+   confidence and state uncertainty clearly.
+5) Do not mark claims false solely because details are still emerging.
+6) Return only valid JSON matching the requested schema.
+```
+
+<Tip>
+  To override which Gemini model is tried first, set the `GEMINI_MODEL` environment variable to any valid Gemini model identifier. It will be inserted at position 0 in the candidate list before the hardcoded fallbacks.
+</Tip>

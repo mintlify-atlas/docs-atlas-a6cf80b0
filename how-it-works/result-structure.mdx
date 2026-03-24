@@ -1,0 +1,333 @@
+---
+title: Result Structure
+description: The AnalysisResult shape returned by POST /api/analyze — every field explained with examples.
+---
+
+Every successful call to `POST /api/analyze` returns a single JSON object that conforms to the `AnalysisResult` interface defined in `src/lib/analysis.ts`. The same shape is used across all model paths (Gemini, Foundry, and heuristic fallback) because every path passes through `normalizeAnalysisResult` before returning.
+
+## Full type definition
+
+```typescript
+export interface AnalysisResult {
+  credibilityScore: CredibilityLevel | string;
+  summary: string;
+  mainClaims: string[];
+  flags: AnalysisFlag[];
+  sourceNotes: string;
+  contextNotes: string;
+  nextSteps: string[];
+  citations: AnalysisCitation[];
+  grounding: AnalysisGrounding;
+  warnings: string[];
+}
+
+export interface AnalysisFlag {
+  type: string;
+  quote: string;
+  explanation: string;
+}
+
+export interface AnalysisCitation {
+  title: string;
+  url: string;
+  domain: string;
+  publishedAt: string | null;
+  snippet: string;
+  sourceType: CitationSourceType;  // "official" | "major-news" | "institutional" | "reference" | "other"
+  recency: CitationRecency;        // "fresh" | "recent" | "aging" | "stale" | "unknown"
+}
+
+export interface AnalysisGrounding {
+  attempted: boolean;
+  succeeded: boolean;
+  searchQueries: string[];
+  usedExtract: boolean;
+  warning: string | null;
+  retrievedAt: string;
+  isTimeSensitive: boolean;
+}
+```
+
+---
+
+## Field reference
+
+### `credibilityScore`
+
+**Type:** one of five string literals (or a raw model string if unrecognized)
+
+The top-level verdict. Five levels are defined, each with a numeric score used for UI display:
+
+| Level | Score | Tone |
+|---|---|---|
+| `Credible` | 88 | Strong |
+| `Mostly credible` | 73 | Positive |
+| `Mixed / use caution` | 55 | Mixed |
+| `Weakly supported` | 33 | Caution |
+| `High-risk / likely misleading` | 16 | Risk |
+
+If the model returns a string outside these five values, `getCredibilityConfig` falls back to a neutral config (score 50, `"Mixed / use caution"` display label) so the UI always has something to render.
+
+---
+
+### `summary`
+
+**Type:** `string`
+
+A concise paragraph explaining the overall credibility assessment. Written by the model in plain language — it is the first thing users read in the result view. For heuristic fallback results, the summary is fixed:
+
+> "Automated provider analysis was safety-filtered, so this is a conservative heuristic assessment. Verify with primary sources."
+
+For the system default (HTTP 500), it reads:
+
+> "Analysis is temporarily unavailable."
+
+---
+
+### `mainClaims`
+
+**Type:** `string[]`
+
+The core factual assertions extracted from the submitted text, written by the model as neutral declarative statements. These separate the claim skeleton from emotional framing so each assertion can be evaluated independently.
+
+**Example:**
+```json
+[
+  "City officials held emergency meetings regarding power infrastructure.",
+  "A citywide curfew is planned for Friday evening.",
+  "Residents are advised to prepare emergency supplies."
+]
+```
+
+For heuristic fallback, `mainClaims` is populated with the first 4 sentences of the raw submitted text.
+
+---
+
+### `flags`
+
+**Type:** `AnalysisFlag[]`
+
+Risk signals identified in the content. Each flag has three fields:
+
+| Field | Description |
+|---|---|
+| `type` | Signal category, e.g. `"Emotional Language"`, `"Weak Sourcing"`, `"Missing Context"`, `"Overconfident Framing"` |
+| `quote` | The exact phrase from the submitted text that triggered this flag (may be empty for structural flags) |
+| `explanation` | A plain-language explanation of why this pattern reduces credibility |
+
+**Example:**
+```json
+[
+  {
+    "type": "Emotional Language",
+    "quote": "BREAKING",
+    "explanation": "Uses urgency to provoke rapid sharing before verification."
+  },
+  {
+    "type": "Weak Sourcing",
+    "quote": "officials are hiding",
+    "explanation": "The claim relies on unnamed officials rather than attributable statements."
+  },
+  {
+    "type": "Missing Context",
+    "quote": "",
+    "explanation": "No timeline, no primary document, and no named authority to verify against."
+  }
+]
+```
+
+`normalizeAnalysisResult` defaults `type` to `"Signal"` and `explanation` to `"No additional explanation was provided."` if the model omits these fields.
+
+---
+
+### `sourceNotes`
+
+**Type:** `string`
+
+A prose assessment of the sourcing quality in the submitted content. The model is instructed to explicitly address:
+
+- Whether primary sources are named and attributable
+- Whether evidence comes from official, major-news, institutional, or weak sources
+- Verification gaps or indirect evidence chains
+
+After model analysis, `mergeGroundingIntoResult` appends a grounding stamp (once) to this field:
+
+> `"Live Tavily grounding checked 4 source(s) at 2026-03-24T10:30:00Z."`
+
+Or, if grounding failed:
+
+> `"Live Tavily grounding failed before model analysis. Model-only analysis was used."`
+
+---
+
+### `contextNotes`
+
+**Type:** `string`
+
+Notes on missing baselines, omitted timelines, evolving details, or absent comparative context. The model uses this field to explain what additional information a reader would need to fully evaluate the claim.
+
+`mergeGroundingIntoResult` appends a time-sensitivity note (once) to this field:
+
+> `"Claim classified as time-sensitive: recency weighting was applied during retrieval."`
+
+Or for non-time-sensitive claims:
+
+> `"Claim classified as less time-sensitive: broader corroboration was used."`
+
+---
+
+### `nextSteps`
+
+**Type:** `string[]`
+
+Actionable verification steps written by the model as a checklist. These tell the user what to do before trusting, citing, or sharing the content.
+
+**Example:**
+```json
+[
+  "Search for official statements from named municipal authorities.",
+  "Check Reuters, AP, or BBC for corroborating coverage from the same timeframe.",
+  "Look for primary documents or press releases rather than secondhand reporting."
+]
+```
+
+For heuristic fallback, the list always includes the Foundry policy block reason as the final step so users understand why the AI was unavailable.
+
+---
+
+### `citations`
+
+**Type:** `AnalysisCitation[]`
+
+The live sources retrieved by Tavily grounding, after ranking and deduplication. Up to 5 citations are returned.
+
+Each citation describes one source:
+
+| Field | Type | Description |
+|---|---|---|
+| `title` | `string` | Page or article title (defaults to `"Untitled source"`) |
+| `url` | `string` | Full URL of the source |
+| `domain` | `string` | Normalized hostname without `www.`, e.g. `"reuters.com"` |
+| `publishedAt` | `string \| null` | ISO date string from Tavily, or `null` if not available |
+| `snippet` | `string` | Relevant excerpt (up to 340 chars from search; up to 320 chars from extract) |
+| `sourceType` | `CitationSourceType` | `"official"`, `"major-news"`, `"institutional"`, `"reference"`, or `"other"` |
+| `recency` | `CitationRecency` | `"fresh"`, `"recent"`, `"aging"`, `"stale"`, or `"unknown"` |
+
+**Recency thresholds (time-sensitive claims):**
+
+| Recency | Age |
+|---|---|
+| `fresh` | ≤ 30 hours |
+| `recent` | ≤ 7 days |
+| `aging` | ≤ 30 days |
+| `stale` | > 30 days |
+
+**Recency thresholds (non-time-sensitive claims):**
+
+| Recency | Age |
+|---|---|
+| `recent` | ≤ 30 days |
+| `aging` | ≤ 180 days |
+| `stale` | > 180 days |
+
+Citations are an empty array when Tavily is not configured or when all searches failed.
+
+---
+
+### `grounding`
+
+**Type:** `AnalysisGrounding`
+
+Metadata about the Tavily grounding attempt. Always present — populated with safe defaults if grounding was not attempted.
+
+| Field | Type | Description |
+|---|---|---|
+| `attempted` | `boolean` | Whether a Tavily grounding call was made |
+| `succeeded` | `boolean` | Whether at least one usable citation was retrieved |
+| `searchQueries` | `string[]` | The queries sent to Tavily (up to 3) |
+| `usedExtract` | `boolean` | Whether `client.extract()` was called on top sources |
+| `warning` | `string \| null` | The first warning generated during grounding, if any |
+| `retrievedAt` | `string` | ISO timestamp of when grounding ran |
+| `isTimeSensitive` | `boolean` | Whether the claim was classified as time-sensitive |
+
+---
+
+### `warnings`
+
+**Type:** `string[]`
+
+A deduplicated list of non-fatal issues raised during the pipeline. These surface in the result UI to explain reduced confidence. Common warnings include:
+
+- `"Live web grounding failed: TAVILY_API_KEY is not configured. Analysis may be less reliable for time-sensitive claims."`
+- `"One or more Tavily searches failed (1/3)."`
+- `"Most retrieved sources are not recent for this time-sensitive claim. Confidence should be reduced."`
+- `"Some Tavily extract calls failed (1/3)."`
+
+Warnings from both the grounding step and the model result are merged and deduplicated by `mergeWarnings` before the final response is returned.
+
+---
+
+## Example response
+
+```json
+{
+  "credibilityScore": "Mixed / use caution",
+  "summary": "A concise overall explanation of the credibility assessment.",
+  "mainClaims": ["Claim 1", "Claim 2"],
+  "flags": [
+    {
+      "type": "Emotional Language",
+      "quote": "BREAKING",
+      "explanation": "Uses urgency to provoke rapid sharing."
+    }
+  ],
+  "sourceNotes": "Summary of source quality and source reliability. Live Tavily grounding checked 3 source(s) at 2026-03-24T10:30:00.000Z.",
+  "contextNotes": "Notes on missing context, uncertainty, or evolving details. Claim classified as time-sensitive: recency weighting was applied during retrieval.",
+  "nextSteps": [
+    "Check official statements",
+    "Look for corroboration from major outlets"
+  ],
+  "citations": [
+    {
+      "title": "Example Source Title",
+      "url": "https://reuters.com/article/example",
+      "domain": "reuters.com",
+      "publishedAt": "2026-03-24",
+      "snippet": "Relevant excerpt from the source article...",
+      "sourceType": "major-news",
+      "recency": "fresh"
+    }
+  ],
+  "grounding": {
+    "attempted": true,
+    "succeeded": true,
+    "searchQueries": [
+      "citywide curfew emergency meeting officials",
+      "Dubai official statement today"
+    ],
+    "usedExtract": false,
+    "warning": null,
+    "retrievedAt": "2026-03-24T10:30:00.000Z",
+    "isTimeSensitive": true
+  },
+  "warnings": []
+}
+```
+
+---
+
+## Normalization guarantees
+
+`normalizeAnalysisResult` is called on every object before it leaves the server — including model outputs, heuristic results, and the default result. The guarantees are:
+
+- `credibilityScore` is always a non-empty string (defaults to `"Mixed / use caution"`)
+- `mainClaims`, `nextSteps`, and `warnings` are always clean `string[]` (no nulls, no empty strings)
+- `flags` always contains valid `{ type, quote, explanation }` objects
+- `citations` only contains entries with a non-empty `url`; `sourceType` and `recency` are validated against their allowed value sets
+- `grounding` always contains all seven fields with correct types
+
+This means consumers of the API can safely access any field without defensive null checks.
+
+<Note>
+  For the TypeScript type reference, see `/api/types/analysis-result`.
+</Note>

@@ -1,0 +1,91 @@
+---
+title: API Overview
+description: Base URL, authentication, content type, error handling, and available endpoints for the TruthLens API.
+---
+
+The TruthLens API is a single-endpoint JSON API that accepts text content and returns a structured credibility analysis. It is designed for self-hosted deployments — no API keys or authentication headers are required to call it.
+
+## Base URL
+
+```bash
+http://localhost:3000
+```
+
+All endpoints are relative to this base URL when running TruthLens locally. In a deployed environment, substitute your host accordingly.
+
+## Content Type
+
+All requests must send JSON and will always receive JSON in response.
+
+```
+Content-Type: application/json
+```
+
+## Authentication
+
+No authentication is required. TruthLens is a self-hosted application — access control is handled at the infrastructure level (e.g., firewall rules, reverse proxy auth), not within the API itself.
+
+## Available Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/analyze` | Analyze text for credibility signals and return a structured result |
+
+See [POST /api/analyze](/api/analyze) for the full endpoint reference.
+
+## Error Handling
+
+The API returns two categories of error responses:
+
+### 400 Bad Request
+
+Returned when the request body is missing or the `text` field is absent or empty.
+
+```json
+{
+  "error": "Request body must include a non-empty text string."
+}
+```
+
+### 500 Provider Failure
+
+Returned when all analysis providers (Gemini and Azure AI Foundry) fail to produce a result. Importantly, the response body is **not** an error envelope — it is a valid `AnalysisResult` object using `DEFAULT_ANALYSIS_RESULT` values, optionally merged with any grounding data that was collected before the failure.
+
+```json
+{
+  "credibilityScore": "Mixed / use caution",
+  "summary": "Analysis is temporarily unavailable.",
+  "mainClaims": [],
+  "flags": [
+    {
+      "type": "System",
+      "quote": "",
+      "explanation": "The analysis service encountered an issue while processing this request."
+    }
+  ],
+  "sourceNotes": "No source verification could be completed.",
+  "contextNotes": "Try again shortly.",
+  "nextSteps": ["Retry this request in a few moments."],
+  "citations": [],
+  "grounding": {
+    "attempted": false,
+    "succeeded": false,
+    "searchQueries": [],
+    "usedExtract": false,
+    "warning": null,
+    "retrievedAt": "",
+    "isTimeSensitive": false
+  },
+  "warnings": []
+}
+```
+
+<Note>
+  Clients should check the HTTP status code to distinguish a successful analysis (200) from a provider failure (500), even though both return an `AnalysisResult`-shaped body.
+</Note>
+
+## Response Shape
+
+Every response from `/api/analyze` — including 500 fallbacks — conforms to the `AnalysisResult` interface defined in `src/lib/analysis.ts`. This guarantees that clients can safely parse the response body regardless of which internal provider path was used.
+
+See [POST /api/analyze](/api/analyze) for the full field-by-field breakdown.

@@ -1,0 +1,131 @@
+---
+title: Citations
+description: AnalysisCitation and the CitationSourceType and CitationRecency union types that classify each web-grounded source returned by Tavily.
+---
+
+## AnalysisCitation interface
+
+```typescript
+export interface AnalysisCitation {
+  title: string;
+  url: string;
+  domain: string;
+  publishedAt: string | null;
+  snippet: string;
+  sourceType: CitationSourceType;
+  recency: CitationRecency;
+}
+```
+
+## Fields
+
+<ResponseField name="title" type="string" required>
+  The page title of the cited source as returned by Tavily. Defaults to `"Untitled source"` when the Tavily result contains no title.
+</ResponseField>
+
+<ResponseField name="url" type="string" required>
+  The canonical URL of the source. Citations without a URL are dropped during normalisation and will never appear in an `AnalysisResult`.
+</ResponseField>
+
+<ResponseField name="domain" type="string" required>
+  The hostname of the URL with the leading `www.` stripped and lowercased. Derived at grounding time via `new URL(url).hostname`. Falls back to `"unknown"` if the URL cannot be parsed.
+</ResponseField>
+
+<ResponseField name="publishedAt" type="string | null" required>
+  The publication date string as provided by Tavily, or `null` if no date was available. The format is whatever Tavily returns — typically an ISO 8601 date string such as `"2024-11-03T14:22:00Z"`. Used by the recency classification logic; `null` values produce a `recency` of `"unknown"`.
+</ResponseField>
+
+<ResponseField name="snippet" type="string" required>
+  A short excerpt from the source used as evidence context. When Tavily extract succeeds for this URL, the excerpt is taken from the fuller extracted content (up to 320 characters); otherwise the Tavily search snippet is used (up to 340 characters). Defaults to `"No source snippet available."` if neither is present.
+</ResponseField>
+
+<ResponseField name="sourceType" type="CitationSourceType" required>
+  A classification of the source's authority tier. See [CitationSourceType](#citationsourcetype) below.
+</ResponseField>
+
+<ResponseField name="recency" type="CitationRecency" required>
+  A classification of how fresh the source is relative to when grounding ran. See [CitationRecency](#citationrecency) below.
+</ResponseField>
+
+## CitationSourceType
+
+```typescript
+export type CitationSourceType =
+  | "official"
+  | "major-news"
+  | "institutional"
+  | "reference"
+  | "other";
+```
+
+Source type is inferred automatically from the citation's domain using pattern matching. The classification is applied in priority order — a domain that matches multiple tiers is assigned the highest-priority match.
+
+| Value | Priority | Criteria |
+|---|---|---|
+| `official` | 1 (highest) | Domains matching `.gov`, `.gov.*`, `.mil`, `.mil.*`, `.int`, `who.int`, `un.org`, `europa.eu`, `ec.europa.eu` |
+| `major-news` | 2 | Exact domain match against: reuters.com, apnews.com, bbc.com, nytimes.com, washingtonpost.com, wsj.com, bloomberg.com, ft.com, theguardian.com, npr.org, aljazeera.com, cnn.com, abcnews.go.com, cbsnews.com, nbcnews.com |
+| `reference` | 3 | Domains matching `wikipedia.org`, `britannica.com`, `ourworldindata.org` |
+| `institutional` | 4 | Domains ending in `.edu`, `.ac.uk`, or `.org` |
+| `other` | 5 (lowest) | All remaining domains |
+
+<Note>
+  The `reference` tier is checked before `institutional` in the source code, so `wikipedia.org` is classified as `"reference"` rather than `"institutional"` despite ending in `.org`.
+</Note>
+
+Source type also influences the internal ranking score used to select which sources become citations:
+
+| Source type | Ranking bonus |
+|---|---|
+| `official` | +24 |
+| `major-news` | +18 |
+| `institutional` | +12 |
+| `reference` | +8 |
+| `other` | 0 |
+
+## CitationRecency
+
+```typescript
+export type CitationRecency =
+  | "fresh"
+  | "recent"
+  | "aging"
+  | "stale"
+  | "unknown";
+```
+
+Recency is calculated by comparing the source's `publishedAt` date against the `retrievedAt` timestamp recorded when grounding ran. The thresholds differ depending on whether the analysed claim is time-sensitive.
+
+### Time-sensitive claims
+
+Applied when `AnalysisGrounding.isTimeSensitive` is `true` (breaking news, high-stake events, explicit date references).
+
+| Value | Age threshold |
+|---|---|
+| `fresh` | ≤ 30 hours |
+| `recent` | > 30 hours and ≤ 7 days |
+| `aging` | > 7 days and ≤ 30 days |
+| `stale` | > 30 days |
+| `unknown` | No `publishedAt` date available |
+
+### Non-time-sensitive claims
+
+| Value | Age threshold |
+|---|---|
+| `fresh` / `recent` | ≤ 30 days (both map to the same bucket) |
+| `aging` | > 30 days and ≤ 180 days |
+| `stale` | > 180 days |
+| `unknown` | No `publishedAt` date available |
+
+<Note>
+  For non-time-sensitive claims, no distinction is made between `fresh` and `recent` — both ages fall within the same 30-day window and both receive the same ranking bonus. The `fresh` value will not appear in practice for non-time-sensitive results.
+</Note>
+
+Recency also contributes to the internal source ranking score:
+
+| Recency | Time-sensitive bonus | Non-time-sensitive bonus |
+|---|---|---|
+| `fresh` | +20 | +8 |
+| `recent` | +12 | +8 |
+| `aging` | −3 | +2 |
+| `stale` | −16 | −5 |
+| `unknown` | −6 | 0 |

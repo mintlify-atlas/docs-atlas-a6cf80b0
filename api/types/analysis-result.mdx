@@ -1,0 +1,152 @@
+---
+title: AnalysisResult
+description: The primary output type returned by TruthLens after analysing a piece of content. Every field is guaranteed to be present; normalizeAnalysisResult ensures safe defaults when the model returns incomplete data.
+---
+
+## TypeScript interface
+
+```typescript
+export interface AnalysisResult {
+  credibilityScore: CredibilityLevel | string;
+  summary: string;
+  mainClaims: string[];
+  flags: AnalysisFlag[];
+  sourceNotes: string;
+  contextNotes: string;
+  nextSteps: string[];
+  citations: AnalysisCitation[];
+  grounding: AnalysisGrounding;
+  warnings: string[];
+}
+```
+
+## AnalysisFlag interface
+
+```typescript
+export interface AnalysisFlag {
+  type: string;
+  quote: string;
+  explanation: string;
+}
+```
+
+## Fields
+
+<ResponseField name="credibilityScore" type="CredibilityLevel | string" required>
+  One of the five canonical `CredibilityLevel` values produced by the model:
+
+  - `"Credible"`
+  - `"Mostly credible"`
+  - `"Mixed / use caution"`
+  - `"Weakly supported"`
+  - `"High-risk / likely misleading"`
+
+  The type is widened to `string` to accommodate unexpected model output without throwing at runtime. Use `getCredibilityConfig(credibilityScore)` to safely resolve the matching `CredibilityConfig` — if the value is unrecognised, a neutral fallback config is returned.
+</ResponseField>
+
+<ResponseField name="summary" type="string" required>
+  A one-to-three sentence plain-language explanation of the overall credibility verdict. Written by the model and intended to be shown directly to end users.
+</ResponseField>
+
+<ResponseField name="mainClaims" type="string[]" required>
+  Discrete factual assertions extracted from the input content. Each entry is a self-contained claim as the model identified it. The array may be empty when the input is too short or ambiguous for claim extraction.
+</ResponseField>
+
+<ResponseField name="flags" type="AnalysisFlag[]" required>
+  Warning signals detected in the content. Each flag contains three sub-fields:
+
+  <Expandable title="AnalysisFlag fields">
+    <ResponseField name="type" type="string" required>
+      A short category label for the signal, for example `"Emotional language"`, `"Unverified statistic"`, or `"Missing attribution"`.
+    </ResponseField>
+    <ResponseField name="quote" type="string" required>
+      The verbatim excerpt from the input that triggered this flag. May be an empty string when no specific passage can be isolated.
+    </ResponseField>
+    <ResponseField name="explanation" type="string" required>
+      A human-readable description of why this excerpt is flagged and what risk it represents.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="sourceNotes" type="string" required>
+  A prose assessment of the quality, diversity, and reliability of the sources referenced in the input content. May note whether sources are absent, anonymous, single-origin, or contradict each other.
+</ResponseField>
+
+<ResponseField name="contextNotes" type="string" required>
+  Observations about missing context, framing gaps, or information that would be needed to fully evaluate the claim. For example: "No publication date is given" or "The statistic lacks a denominator."
+</ResponseField>
+
+<ResponseField name="nextSteps" type="string[]" required>
+  Recommended verification actions for the reader. Each entry is an actionable instruction such as "Cross-check with an official government source" or "Search for the original study referenced."
+</ResponseField>
+
+<ResponseField name="citations" type="AnalysisCitation[]" required>
+  Web-grounded sources retrieved by Tavily and injected into the model's analysis context. Empty when grounding was not attempted or returned no usable results. See [AnalysisCitation](/api/types/citations) for the full field reference.
+</ResponseField>
+
+<ResponseField name="grounding" type="AnalysisGrounding" required>
+  Metadata describing how (and whether) live web grounding ran for this request. Always present. See [AnalysisGrounding](/api/types/grounding) for the full field reference.
+</ResponseField>
+
+<ResponseField name="warnings" type="string[]" required>
+  System-level warning messages generated during processing — distinct from `flags`, which are content-level signals. Examples:
+
+  - `"One or more Tavily searches failed (1/3)."`
+  - `"Most retrieved sources are not recent for this time-sensitive claim."`
+  - `"Live web grounding failed: TAVILY_API_KEY is not configured."`
+
+  An empty array indicates a clean run with no system-level issues.
+</ResponseField>
+
+## DEFAULT_ANALYSIS_RESULT
+
+`DEFAULT_ANALYSIS_RESULT` is the safe fallback value returned by `normalizeAnalysisResult` when the model produces a non-object response. It signals a system failure rather than a content verdict.
+
+```typescript
+export const DEFAULT_ANALYSIS_RESULT: AnalysisResult = {
+  credibilityScore: "Mixed / use caution",
+  summary: "Analysis is temporarily unavailable.",
+  mainClaims: [],
+  flags: [
+    {
+      type: "System",
+      quote: "",
+      explanation:
+        "The analysis service encountered an issue while processing this request.",
+    },
+  ],
+  sourceNotes: "No source verification could be completed.",
+  contextNotes: "Try again shortly.",
+  nextSteps: ["Retry this request in a few moments."],
+  citations: [],
+  grounding: {
+    attempted: false,
+    succeeded: false,
+    searchQueries: [],
+    usedExtract: false,
+    warning: null,
+    retrievedAt: "",
+    isTimeSensitive: false,
+  },
+  warnings: [],
+};
+```
+
+<Note>
+  Consumers should treat a result whose `summary` equals `"Analysis is temporarily unavailable."` as an error state and prompt the user to retry rather than displaying the verdict.
+</Note>
+
+## normalizeAnalysisResult
+
+```typescript
+export function normalizeAnalysisResult(input: unknown): AnalysisResult
+```
+
+Parses and coerces an unknown value — typically the raw JSON response from the Gemini model — into a well-typed `AnalysisResult`. Every field is validated individually:
+
+- String fields fall back to their `DEFAULT_ANALYSIS_RESULT` counterpart if the value is missing or not a string.
+- Array fields (`mainClaims`, `nextSteps`, `warnings`) are filtered to non-empty strings.
+- `flags` entries missing required sub-fields receive safe defaults (`type` → `"Signal"`, `explanation` → `"No additional explanation was provided."`).
+- `citations` entries without a `url` are silently dropped.
+- `grounding` is rebuilt field-by-field with boolean and string type checks.
+- If `input` is not an object at all, `DEFAULT_ANALYSIS_RESULT` is returned immediately.

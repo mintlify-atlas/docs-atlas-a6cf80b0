@@ -1,0 +1,129 @@
+---
+title: Deployment
+description: How to run TruthLens locally for development or deploy it as a production build.
+---
+
+TruthLens is a [Next.js 16.1.6](https://nextjs.org) application. It can be run locally for development or built into an optimized production bundle. Both paths are covered below.
+
+<Note>
+  Node.js 20 or later is recommended. The project's `@types/node` dependency targets `^20`, and Next.js 16 requires a current LTS release.
+</Note>
+
+## Local Development
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/manavcodaty/TruthLens.git
+    cd TruthLens
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    npm install
+    ```
+
+    This installs all runtime and development dependencies declared in `package.json`, including the Google Generative AI SDK, Azure AI Inference client, Tavily core client, and Next.js itself.
+  </Step>
+
+  <Step title="Create your environment file">
+    Create a `.env.local` file in the project root and add your API keys. At minimum you need either `GEMINI_API_KEY` (primary path) or both Azure Foundry variables (fallback path).
+
+    ```env
+    # Gemini (primary analysis path)
+    GEMINI_API_KEY=your_gemini_api_key_here
+
+    # Optional: pin a specific Gemini model
+    # GEMINI_MODEL=gemini-2.5-flash
+
+    # Tavily (optional — enables live web grounding)
+    TAVILY_API_KEY=your_tavily_api_key_here
+
+    # Azure AI Foundry (fallback path)
+    AZURE_AI_FOUNDRY_ENDPOINT=https://your-endpoint.inference.ai.azure.com
+    AZURE_AI_FOUNDRY_API_KEY=your_azure_api_key_here
+    ```
+
+    See the [Configuration](/self-hosting/configuration) page for a full description of every variable.
+  </Step>
+
+  <Step title="Start the development server">
+    ```bash
+    npm run dev
+    ```
+
+    Next.js will start a local server with hot-module replacement enabled.
+  </Step>
+
+  <Step title="Open the application">
+    Navigate to [http://localhost:3000](http://localhost:3000) in your browser. The analysis workspace will be available immediately.
+  </Step>
+</Steps>
+
+## Production Build
+
+<Steps>
+  <Step title="Configure your environment variables">
+    On your production host, set the same environment variables you would use in `.env.local`. Inject them via your platform's secrets manager, systemd environment, or a CI/CD pipeline — **not** by committing `.env.local` to source control.
+
+    ```env
+    NODE_ENV=production
+    GEMINI_API_KEY=your_gemini_api_key_here
+    TAVILY_API_KEY=your_tavily_api_key_here
+    AZURE_AI_FOUNDRY_ENDPOINT=https://your-endpoint.inference.ai.azure.com
+    AZURE_AI_FOUNDRY_API_KEY=your_azure_api_key_here
+    ```
+  </Step>
+
+  <Step title="Build the application">
+    ```bash
+    npm run build
+    ```
+
+    Next.js compiles and optimizes the app into the `.next/` directory. Build-time errors, type issues, and lint warnings will surface here.
+  </Step>
+
+  <Step title="Start the production server">
+    ```bash
+    npm run start
+    ```
+
+    This starts the Next.js production server on port 3000 by default. You can change the port with the `PORT` environment variable or by placing a reverse proxy (nginx, Caddy, Vercel, etc.) in front.
+  </Step>
+</Steps>
+
+## Available npm Scripts
+
+| Script | Command | Purpose |
+|---|---|---|
+| `dev` | `next dev` | Starts the development server with HMR on `localhost:3000` |
+| `build` | `next build` | Compiles and optimizes the app for production |
+| `start` | `next start` | Runs the compiled production build |
+| `lint` | `eslint` | Runs ESLint across the project |
+
+## Production Considerations
+
+### HTTPS
+
+Next.js's built-in server does not terminate TLS. In production, place TruthLens behind a reverse proxy that handles HTTPS (nginx, Caddy, a load balancer, or a managed platform like Vercel or Railway). API keys are transmitted in server-side environment variables and never exposed to the browser, but the connection between the user and your server must be encrypted.
+
+### API Key Security
+
+All API keys (`GEMINI_API_KEY`, `TAVILY_API_KEY`, `AZURE_AI_FOUNDRY_API_KEY`) are read server-side in the `POST /api/analyze` route handler. They are never bundled into the client JavaScript. Make sure they are set as server-only secrets on your deployment platform and are not prefixed with `NEXT_PUBLIC_`.
+
+### NODE_ENV
+
+Set `NODE_ENV=production` before running `npm run start`. Next.js enables React's production build, disables developer warnings, and activates performance optimizations when this variable is set correctly.
+
+## Convex
+
+TruthLens includes Convex as a dependency and the `convex/_generated/` directory is present in the repository. The current implementation uses Convex for data layer integration. If your deployment requires a live Convex backend, you will need to:
+
+1. Create a Convex project at [convex.dev](https://convex.dev)
+2. Run `npx convex dev` to link the project and push your schema
+3. Set the `NEXT_PUBLIC_CONVEX_URL` environment variable to your deployment's URL
+
+<Tip>
+  The core analysis functionality in `POST /api/analyze` operates independently of Convex. If you are deploying TruthLens purely for its credibility analysis API, you can defer Convex setup until you need persistent storage or real-time features.
+</Tip>

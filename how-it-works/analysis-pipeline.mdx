@@ -1,0 +1,244 @@
+---
+title: Analysis Pipeline
+description: Step-by-step walkthrough of the POST /api/analyze route — from request parsing to normalized AnalysisResult.
+---
+
+Every credibility analysis runs through a single Next.js Route Handler at `POST /api/analyze`. This page walks through each stage of the pipeline in the order they execute.
+
+<Steps>
+  <Step title="Parse and validate the request body">
+    The handler reads the raw JSON body and checks that a non-empty `text` field is present:
+
+    ```typescript
+    const payload = await request.json();
+    const text = payload?.text;
+
+    if (typeof text !== "string" || text.trim().length === 0) {
+      return NextResponse.json(
+        { error: "Request body must include a non-empty text string." },
+        { status: 400 }
+      );
+    }
+    ```
+
+    If `text` is missing or blank, the route returns HTTP 400 immediately. No AI calls are made.
+
+    The frontend (`analyze-workspace.tsx`) optionally prepends a source URL before sending:
+
+    ```typescript
+    const payloadText = sourceUrl.trim()
+      ? `Source URL: ${sourceUrl.trim()}\n\n${text.trim()}`
+      : text.trim();
+    ```
+  </Step>
+
+  <Step title="Build Tavily grounding">
+    Before any model call, the pipeline retrieves live web evidence to ground the analysis in current facts. The full process inside `buildTavilyGrounding` is:
+
+    **2a. Classify the claim** — `classifyClaim(text)` scans the input for time-sensitivity signals:
+
+    - `isTimeSensitive` — triggered by terms like `"breaking"`, `"urgent"`, `"right now"`, `"today"`, ISO dates, or short date formats
+    - `isBreaking` — triggered by `"breaking"`, `"developing"`, `"emergency"`, `"alert"`, `"lockdown"`, etc.
+    - `isHighStake` — triggered by `"war"`, `"election"`, `"earthquake"`, `"market crash"`, `"product recall"`, etc.
+    - `prioritizeOfficialSources` — triggered by `"government"`, `"white house"`, `"court"`, `"central bank"`, etc.
+
+    **2b. Build search queries** — `buildSearchQueries` produces up to 3 distinct queries:
+
+    1. A condensed version of the first two sentences (max 180 chars)
+    2. An entity-based query using up to 4 named entities + `"official statement"` or `"verified report"` suffix
+    3. For time-sensitive claims: a recency-anchored query with today's formatted date
+    4. For breaking or high-stake claims: a rumor-verification query targeting official sources
+
+    Sensational terms (`"breaking"`, `"shocking"`, `"100%"`, `"share now"`, etc.) are stripped before query construction.
+
+    **2c. Run searches** — All queries are dispatched in parallel via `Promise.all`. Each search uses:
+
+    | Setting | Time-sensitive | Non-time-sensitive |
+    |---|---|---|
+    | `searchDepth` | `"advanced"` | `"basic"` |
+    | `topic` | `"news"` | `"general"` |
+    | `maxResults` | `8` | `6` |
+    | `timeRange` | `"day"` (breaking) / `"week"` | — |
+    | `days` | `2` (breaking) / `14` | — |
+
+    **2d. Rank results** — Each result receives a composite `rankingScore`:
+
+    ```
+    rankingScore = (tavilyScore × 100) + sourceTypeScore + recencyScore
+    ```
+
+    Source type scores: `official` +24, `major-news` +18, `institutional` +12, `reference` +8, `other` 0.
+
+    Recency scores (time-sensitive): `fresh` +20, `recent` +12, `aging` −3, `stale` −16, `unknown` −6.
+
+    Official domains include `.gov`, `.mil`, `.int`, `who.int`, `un.org`, `europa.eu`. Major news domains include `reuters.com`, `apnews.com`, `bbc.com`, `nytimes.com`, `washingtonpost.com`, and others.
+
+    **2e. Deduplicate and select sources** — `dedupeAndSelectSources` canonicalizes URLs (strips fragment and trailing slash), keeps the highest-scoring version of each URL, enforces a maximum of 2 results per domain, and selects the top 5 sources overall.
+
+    **2f. Optionally extract full content** — If evidence consistency is not `"consistent"`, any snippets are short (< 140 chars), the claim is both time-sensitive and high-stake, or official sources are present, `shouldUseExtract` triggers a `client.extract()` call on the top 3 URLs (by source priority). Extracted content is truncated to 700 chars and merged into each source's `excerpt` field.
+
+    **2g. Format the prompt context** — `formatPromptContext` serializes the grounding pack into a plain-text block injected into the model prompt:
+
+    ```
+    LIVE_WEB_GROUNDING_PACK
+    retrieved_at: 2026-03-24T10:30:00.000Z
+    time_sensitive_claim: yes
+    evidence_consistency: consistent
+    official_sources_found: yes
+    stale_evidence_detected: no
+    search_queries:
+    - Dubai citywide curfew emergency meeting
+    - Dubai official statement today
+    sources:
+    [1] title: Dubai Issues Official Statement on...
+    url: https://uae.gov.ae/...
+    domain: uae.gov.ae
+    published_at: 2026-03-24
+    source_type: official
+    recency: fresh
+    snippet: ...
+    ```
+
+    If Tavily is not configured (`TAVILY_API_KEY` missing), grounding is skipped and the prompt context describes sparse evidence.
+  </Step>
+
+  <Step title="Build the grounded prompt">
+    `buildGroundedPrompt(text, today, groundingPromptContext)` assembles the full user-turn prompt sent to the model:
+
+    ```
+    Current date (UTC): 2026-03-24.
+
+    Task:
+    Analyze the user-submitted content for credibility using the live evidence pack.
+    Return ONLY a valid JSON object matching this exact schema:
+    {
+      credibilityScore: '...',
+      summary: '...',
+      mainClaims: ['...'],
+      flags: [{ type: '...', quote: '...', explanation: '...' }],
+      sourceNotes: '...',
+      contextNotes: '...',
+      nextSteps: ['...']
+    }
+
+    Calibration requirements:
+    - Prioritize LIVE_WEB_GROUNDING_PACK over model memory for time-sensitive claims.
+    - Distinguish unsupported rumor, mixed evidence, and confirmed reporting.
+    - Explicitly mention if evidence is recent, stale, sparse, conflicting, or official.
+    - If grounding failed or evidence is weak, reduce confidence and recommend verification actions.
+    - Avoid overclaiming certainty while details are still emerging.
+
+    [LIVE_WEB_GROUNDING_PACK block here]
+
+    Text to analyze:
+    [user text here]
+    ```
+
+    The same system instruction is used for both Gemini and Foundry:
+
+    ```
+    You are TruthLens, an explainable credibility analysis assistant.
+
+    Rules:
+    1) Use the LIVE_WEB_GROUNDING_PACK in the prompt as your primary evidence for time-sensitive or fast-moving claims.
+    2) Compare the submitted text against grounded evidence and separate supported, unsupported, mixed, and uncertain parts.
+    3) In sourceNotes/contextNotes, explicitly mention recency, source quality, official-source presence, and verification gaps.
+    4) If evidence is sparse, stale, conflicting, or grounding failed, lower confidence and state uncertainty clearly.
+    5) Do not mark claims false solely because details are still emerging.
+    6) Return only valid JSON matching the requested schema.
+    ```
+  </Step>
+
+  <Step title="Run Gemini analysis">
+    `runGeminiAnalysis(prompt)` iterates through `MODEL_CANDIDATES` in order:
+
+    ```typescript
+    const MODEL_CANDIDATES = [
+      process.env.GEMINI_MODEL,   // optional override via env var
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-2.5-flash-lite",
+    ].filter(Boolean);
+    ```
+
+    For each candidate, the model is configured with:
+
+    - `systemInstruction`: the `SYSTEM_INSTRUCTION` string above
+    - `responseMimeType`: `"application/json"` — forces JSON output
+    - `responseSchema`: a strict schema matching `AnalysisResult` fields
+
+    The response text is parsed through `extractJsonCandidate`, which tries direct `JSON.parse`, then a fenced code block extraction, then a brace-depth traversal — ensuring robustness against models that wrap JSON in markdown.
+
+    If a model returns a 404 error (model not found or not available in the region), iteration continues to the next candidate. Any other error immediately exits the loop and propagates to the Foundry fallback handler.
+
+    On success, `normalizeAnalysisResult` validates the parsed object and fills missing fields with safe defaults.
+  </Step>
+
+  <Step title="Run Foundry analysis (Gemini fallback)">
+    If `runGeminiAnalysis` throws a non-404 error, the pipeline catches it and attempts `runFoundryAnalysis(prompt)`.
+
+    The Foundry call targets `meta/Meta-Llama-3.1-8B-Instruct` via the Azure AI Inference REST API:
+
+    ```typescript
+    const FOUNDRY_MODEL = "meta/Meta-Llama-3.1-8B-Instruct";
+    ```
+
+    Request parameters:
+
+    ```json
+    {
+      "model": "meta/Meta-Llama-3.1-8B-Instruct",
+      "temperature": 0.2,
+      "max_tokens": 1300,
+      "response_format": { "type": "json_object" },
+      "messages": [
+        { "role": "system", "content": "<SYSTEM_INSTRUCTION>" },
+        { "role": "user", "content": "<grounded prompt>" }
+      ]
+    }
+    ```
+
+    Foundry requires `AZURE_AI_FOUNDRY_ENDPOINT` and `AZURE_AI_FOUNDRY_API_KEY` (or the alternative aliases `AZURE_FOUNDRY_ENDPOINT` / `FOUNDRY_ENDPOINT` and their key equivalents).
+
+    If the response body contains a policy-blocked message, a `FoundryPolicyBlockedError` is thrown (rather than a generic error), which routes execution to the heuristic fallback instead.
+  </Step>
+
+  <Step title="Run heuristic fallback (Foundry policy block)">
+    If Foundry throws `FoundryPolicyBlockedError`, `buildPolicyFallbackAnalysis(text, reason)` produces a conservative result without any model call:
+
+    - **Main claims** — first 4 sentences of the submitted text
+    - **Urgency flag** — if the text contains `"breaking"`, `"urgent"`, `"move your money"`, `"prepare now"`, etc.
+    - **Weak sourcing flag** — if the text contains `"insiders"`, `"sources say"`, `"officials are hiding"`, `"unnamed"`, etc.
+    - **Overconfident framing flag** — if the text contains `"proves"`, `"guaranteed"`, `"admit"`, `"refuse to cover"`, etc.
+    - **Missing context flag** — always appended
+    - **Credibility score** — `"High-risk / likely misleading"` if 3+ flags; otherwise `"Mixed / use caution"`
+
+    The `nextSteps` array always includes the provider's policy block reason so users understand why AI analysis was unavailable.
+
+    See [Fallback Logic](/how-it-works/fallback-logic) for the full fallback decision tree.
+  </Step>
+
+  <Step title="Merge grounding into the result">
+    Regardless of which path produced the analysis result, `mergeGroundingIntoResult(result, groundingResult)` merges Tavily data into the model output:
+
+    - **Citations** — replaced entirely with the ranked, deduplicated sources from Tavily
+    - **Grounding metadata** — the `AnalysisGrounding` object is attached as-is
+    - **Warnings** — merged and deduplicated from both the model result and the grounding result
+    - **`sourceNotes`** — a grounding stamp is appended once, e.g. `"Live Tavily grounding checked 4 source(s) at 2026-03-24T10:30:00Z."`
+    - **`contextNotes`** — a time-sensitivity note is appended once, e.g. `"Claim classified as time-sensitive: recency weighting was applied during retrieval."`
+
+    `appendOnce` guards prevent duplicate stamps if the merge function is called multiple times.
+  </Step>
+
+  <Step title="Return the normalized AnalysisResult">
+    The final `NextResponse.json(result, { status: 200 })` returns the fully normalized `AnalysisResult` object. The browser's `normalize AnalysisResult` call on receipt provides a second validation pass as a defensive measure.
+
+    If every provider fails, the route returns `DEFAULT_ANALYSIS_RESULT` with HTTP 500. If grounding completed before the model failure, grounding data is still merged into the default result so citations and metadata are not lost.
+
+    See [Result Structure](/how-it-works/result-structure) for the full field reference.
+  </Step>
+</Steps>
+
+<Tip>
+  The pipeline always completes — it never leaves the client waiting indefinitely. The heuristic fallback and default result ensure a structured response even when all AI providers are unavailable.
+</Tip>
