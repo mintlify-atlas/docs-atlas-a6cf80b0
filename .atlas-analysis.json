@@ -1,0 +1,93 @@
+{
+  "projectType": "saas",
+  "projectName": "TruthLens",
+  "projectDescription": "An explainable credibility analysis platform that helps users evaluate headlines, articles, and social posts for weak sourcing, emotional manipulation, framing bias, and missing context.",
+  "theme": "willow",
+  "primaryColor": "#41bebb",
+  "lightColor": "#0c2848",
+  "darkColor": "#c8edb8",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "environment-setup"]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/credibility-analysis",
+              "features/live-grounding",
+              "features/multi-model-architecture",
+              "features/comparison-mode",
+              "features/sample-analyses"
+            ]
+          },
+          {
+            "group": "How It Works",
+            "pages": [
+              "how-it-works/overview",
+              "how-it-works/analysis-pipeline",
+              "how-it-works/fallback-logic",
+              "how-it-works/result-structure"
+            ]
+          },
+          {
+            "group": "Self-Hosting",
+            "pages": [
+              "self-hosting/deployment",
+              "self-hosting/configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/overview",
+              "api/analyze"
+            ]
+          },
+          {
+            "group": "Data Types",
+            "pages": [
+              "api/types/analysis-result",
+              "api/types/credibility-levels",
+              "api/types/citations",
+              "api/types/grounding"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Explainable credibility scoring across five levels (Credible to High-risk)",
+    "Live web grounding via Tavily search and extract for time-sensitive claims",
+    "Multi-model AI pipeline: Gemini primary with Azure AI Foundry / Llama 3.1 fallback",
+    "Structured output: claims, flags, source notes, context notes, next steps, and citations",
+    "Claim classification for time-sensitivity, breaking news, and high-stake events",
+    "Heuristic policy-blocked fallback for robust analysis under all conditions",
+    "Side-by-side comparison mode for two pieces of content",
+    "Curated sample analyses for onboarding and demonstration"
+  ],
+  "publicApiSurface": [
+    "POST /api/analyze",
+    "AnalysisResult",
+    "AnalysisFlag",
+    "AnalysisCitation",
+    "AnalysisGrounding",
+    "CredibilityLevel",
+    "normalizeAnalysisResult(input)",
+    "getCredibilityConfig(level)",
+    "buildTavilyGrounding(text, now)",
+    "CREDIBILITY_LEVELS",
+    "CREDIBILITY_CONFIG",
+    "DEFAULT_ANALYSIS_RESULT"
+  ]
+}
